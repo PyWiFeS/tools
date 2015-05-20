@@ -133,13 +133,26 @@ def conv_ambre_spect(ambre_dir,ambre_conv_dir):
 def make_wifes_p08_template(ddir, fn, out_dir, star,rv=0.0):
     """From a p08 file, create a template spectrum for future cross-correlation.
     The template is interpolated onto a 0.1 Angstrom grid (to match higher resolution 
-    templates."""
+    templates.
+    
+    Parameters
+    ----------
+    ddir: string
+        Data directory for the p08 file
+        
+    fn: string
+        p08 fits filename
+        
+    out_dir: string
+        Output directory
+    
+    """
     flux_stamp,wave = read_and_find_star_p08(ddir + '/' + fn)
-    #!!! Red/blueshift the wavelength scale here !!!
+    heliocentric_correction = pyfits.getheader(ddir + '/' + fn)['RADVEL']
     spectrum,sig = weighted_extract_spectrum(flux_stamp)
     dell_template = 0.1
     wave_template=np.arange(90000)*dell_template + 3000
-    spectrum_interp = np.interp(wave_template,wave,spectrum)
+    spectrum_interp = np.interp(wave_template,wave*(1 - (rv - heliocentric_correction)/2.998e5),spectrum)
     outfn = out_dir + '/' + star + ':' + fn
     pyfits.writeto(outfn,spectrum_interp,clobber=True)
     
@@ -160,12 +173,12 @@ def rv_fit_mlnlike(shift,modft,data,errors,gaussian_offset):
     gaussian_offset: float
         Offset to Gaussian uncertainty distribution
     """
-    shifted_mod = np.fft.irfft(modft * np.exp(-2j * np.pi * np.arange(len(modft))/len(modft) * shift))
+    shifted_mod = np.fft.irfft(modft * np.exp(-2j * np.pi * np.arange(len(modft))/len(data) * shift))
     return -np.sum(np.log(np.exp(-(data - shifted_mod)**2/2.0/errors**2) + gaussian_offset))
 
     
 def calc_rv_template(spect,wave,sig, template_conv_dir,bad_intervals,smooth_distance=101, \
-    gaussian_offset=1e-5,nwave_log=1e4,oversamp=1,fig_fn='',convolve_template=True):
+    gaussian_offset=1e-4,nwave_log=1e4,oversamp=1,fig_fn='',convolve_template=True):
     """Compute a radial velocity based on an best fitting template spectrum.
     Teff is estimated at the same time.
     
@@ -220,7 +233,7 @@ def calc_rv_template(spect,wave,sig, template_conv_dir,bad_intervals,smooth_dist
             continue
         whi = np.where(wave_log > interval[1])[0]
         if len(whi)==0:
-            whi = [len(wave_log)]
+            whi = [len(wave_log)-1]
         whi = whi[0]
         wlo = wlo[0]
         spect_int[wlo:whi] = spect_int[wlo] + np.arange(whi-wlo,dtype='float')/(whi-wlo)*(spect_int[whi] - spect_int[wlo])
@@ -236,9 +249,11 @@ def calc_rv_template(spect,wave,sig, template_conv_dir,bad_intervals,smooth_dist
     for i,template_fn in enumerate(template_fns):
         #Smooth the template spectrum
         template_subsamp = int((wave[1]-wave[0])/dell_template)
+        #Make sure it is an odd number to prevent shifting...
+        template_subsamp = np.maximum((template_subsamp//2)*2 - 1,1)
         spect_template = pyfits.getdata(template_fn)
         spect_template = np.convolve(np.convolve(spect_template,np.ones(template_subsamp)/template_subsamp,'same'),\
-                                  np.ones(2*template_subsamp)/template_subsamp/2,'same')
+                                  np.ones(2*template_subsamp+1)/(2*template_subsamp+1),'same')
         #Interpolate onto the log wavelength grid.
         template_int = np.interp(wave_log,wave_template,spect_template)
         #Normalise 
@@ -250,12 +265,12 @@ def calc_rv_template(spect,wave,sig, template_conv_dir,bad_intervals,smooth_dist
                 continue
             whi = np.where(wave_log > interval[1])[0]
             if len(whi)==0:
-                whi = [len(wave_log)]
+                whi = [len(wave_log)-1]
             whi = whi[0]
             wlo = wlo[0]
-            template_int[wlo:whi] = template_int[wlo] + np.arange(whi-wlo)/(whi-wlo)*(template_int[whi] - template_int[wlo])
+            template_int[wlo:whi] = template_int[wlo] + np.arange(whi-wlo, dtype='float')/(whi-wlo)*(template_int[whi] - template_int[wlo])
         #Subtract smoothed spectrum
-        template_int -= template_int[0] + np.arange(len(template_int))/(len(template_int)-1)*(template_int[-1]-template_int[0])
+        template_int -= template_int[0] + np.arange(len(template_int))/(len(template_int)-1.0)*(template_int[-1]-template_int[0])
         template_int -= np.convolve(template_int,np.ones(smooth_distance)/smooth_distance,'same')
         template_ints[i,:] =  template_int
         cor = np.correlate(spect_int,template_int,'same')
@@ -270,8 +285,13 @@ def calc_rv_template(spect,wave,sig, template_conv_dir,bad_intervals,smooth_dist
     plt.xlabel('Velocity (km/s)')
     plt.ylabel('X Correlation')
     fn_ix = template_fns[ix].rfind('/')
-    fn_ix_delta = template_fnx[ix][fn_ix:].find(':')
-    temperature = template_fns[ix][fn_ix+2:fn_ix+fn_ix_delta]
+    fn_ix_delta = template_fns[ix][fn_ix:].find(':')
+    name = template_fns[ix][fn_ix+1:fn_ix+fn_ix_delta]
+    name_string=name
+    #A little messy !!!
+    if name[0]=='p':
+        name = name[1:]
+        name_string = 'T = ' + name + ' K'
 
     #Fit for a precise RV... note that minimize (rather than minimize_scalar) failed more
     #often for spectra that were not good matches.
@@ -299,10 +319,10 @@ def calc_rv_template(spect,wave,sig, template_conv_dir,bad_intervals,smooth_dist
             print("WARNING: Radial velocity fit did not work, giving up with NaN uncertainty")
         
     rv_sig = np.sqrt(hess_inv*nwave_log/len(spect)/oversamp)*drv
-    plt.title('T = ' + temperature + ' K, RV = {0:4.1f}+/-{1:4.1f} km/s'.format(rv,rv_sig))
+    plt.title(name_string + ', RV = {0:4.1f}+/-{1:4.1f} km/s'.format(rv,rv_sig))
     if len(fig_fn) > 0:
         plt.savefig(fig_fn)
-    return rv,rv_sig,int(temperature)
+    return rv,rv_sig,name
     
 def rv_process_dir(ddir,template_conv_dir='./ambre_conv/',standards_dir='',outfn='rvs.txt',texfn='rvs.tex',outdir=''):
     """Process all files in a directory for radial velocities.
@@ -326,25 +346,25 @@ def rv_process_dir(ddir,template_conv_dir='./ambre_conv/',standards_dir='',outfn
     texfile = open(outdir + '/' + texfn,'w')
     for fn in fns:
         h = pyfits.getheader(fn)
-        flux,wave = read_and_find_star_p08(fn,fig_fn=outdir + h['OBJNAME'] + '.' + h['OBSID'] + '_star.png')
+        flux,wave = read_and_find_star_p08(fn,fig_fn=outdir + '/'+ h['OBJNAME'] + '.' + h['OBSID'] + '_star.png')
         if h['BEAMSPLT']=='RT560':
-            bad_intervals = ([0,5500],[6865,6935],)
+            bad_intervals = ([0,5500],[6862,7020],)
         else:
-            bad_intervals = ([6865,6935],)
+            bad_intervals = ([6862,7020],)
         spectrum,sig = weighted_extract_spectrum(flux)
         specfn = outdir + '/' + fn[fn.rfind('/')+1:] + '.spec.csv'
         specfile = open(specfn,'w')
         for i in range(len(spectrum)):
             specfile.write('{0:6.2f},{1:6.1f},{2:6.1f}\n'.format(wave[i],spectrum[i],sig[i]))
         specfile.close()
-        rv,rv_sig,temp = calc_rv_template(spectrum,wave,sig,template_conv_dir, bad_intervals,\
-            fig_fn=outdir + h['OBJNAME'] + '.' + h['OBSID'] + '_xcor.png')
+        rv,rv_sig,name = calc_rv_template(spectrum,wave,sig,template_conv_dir, bad_intervals,\
+            fig_fn=outdir + '/' + h['OBJNAME'] + '.' + h['OBSID'] + '_xcor.png')
         #Make the Heliocentric correction...
         rv += h['RADVEL']
         outfile.write(h['OBJNAME'] + ','+fn +','+ h['RA'] + ','+ h['DEC'] + ',' + h['BEAMSPLT'] + \
-         ',{0:10.3f},{1:5.1f},{2:5.1f},{3:5.0f} \n'.format(h['MJD-OBS'],rv,rv_sig,temp))
+         ',{0:10.3f},{1:5.1f},{2:5.1f},'.format(h['MJD-OBS'],rv,rv_sig)+name + ' \n')
         texfile.write(h['OBJNAME'] + ' & '+ h['RA'] + ' & '+ h['DEC'] + ' & ' + h['BEAMSPLT'] + \
-            ' & {0:10.3f} & {1:5.1f} $\pm$ {2:5.1f} & {3:5.0f} \\\\ \n'.format(h['MJD-OBS'],rv,rv_sig,temp))
+            ' & {0:10.3f} & {1:5.1f} $\pm$ {2:5.1f} & '.format(h['MJD-OBS'],rv,rv_sig,name) + name + '\\\\ \n')
     outfile.close()
     texfile.close()
     

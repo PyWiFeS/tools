@@ -27,7 +27,7 @@ import matplotlib.pyplot as plt
 import scipy.optimize as op
 import pdb
 import glob
-
+from readcol import readcol
 
 def read_and_find_star_p11(fn, manual_click=False, npix=7, subtract_sky=True,sky_rad=2):
     """Read in a cube and find the star.
@@ -130,6 +130,54 @@ def conv_ambre_spect(ambre_dir,ambre_conv_dir):
         outfn = infn[ix_start:ix_end] + 'conv.fits'
         pyfits.writeto(ambre_conv_dir + '/' + outfn,conv_data, clobber=True)
     
+def conv_tlusty_spect(tlusty_dir,tlusty_conv_dir):    
+    """
+    Take all Tlusty spectra from a directory, convole to 0.1A, 
+    then save to a new directory
+    Currently resampling onto a wavelength grid of 0.1A also, from 
+    3000 to 12000A to match AMBRE spectra, note Tlusty only covers 3000A to 10000A
+    also mostly matching filenames
+    """
+    infns = glob.glob(tlusty_dir + '/*.vis.7')
+    for ii,infn in enumerate(infns):
+		indata = readcol(infn)
+		wav    = indata[:,0]
+		data   = indata[:,1]
+		cdata  = np.convolve(data,np.ones(10)/10.0,'same')
+		intwav = 0.1*np.arange(90000)+3000.0
+		icdata = np.interp(intwav,wav,cdata)
+		n1     = infn.split('/')[-1].split('BG')[1].split('g')	
+		n2     = 'g+'+str(float(n1[1].split('v')[0])/100.0)
+		n1     = 'p'+str(int(n1[0])/1)
+		outname = tlusty_conv_dir+'/'+n1 + ':'+n2+':m0.0:t01:z+0.00:a+0.00.TLUSTYconv.fits'
+		pyfits.writeto(outname,icdata,clobber=True)
+		print('convolving '+ str(ii+1) +' out of ' + str(len(infns)))
+
+def conv_phoenix_spect(pho_dir,pho_conv_dir):    
+    """
+    Take all phoenix spectra from a directory, convolve to 0.1A, 
+    then save to a new directory
+    Currently resampling onto a wavelength grid of 0.1A also, from 
+    3000 to 12000A to match AMBRE spectra
+    also mostly matching filenames
+    """
+    infns = glob.glob(pho_dir + '/*.fits')    
+    for ii,infn in enumerate(infns):
+		data = pyfits.getdata(infn)
+		wav  = pyfits.getdata('WAVE_PHOENIX-ACES-AGSS-COND-2011.fits')
+		##go from vacuum to air wavelengths
+		wav = wav/(1.0+2.735182E-4+131.4182/wav**2+2.76249e8/wav**4)
+		cdata  = np.convolve(data,np.ones(10)/10.0,'same')
+		intwav = 0.1*np.arange(90000)+3000.0
+		icdata = np.interp(intwav,wav,cdata)
+		n1     = infn.split('/')[-1].split('lte')[1].split('-')
+		n2     = 'g'+n1[1]
+		n1     = 'p'+n1[0]
+		outname = pho_conv_dir+'/'+n1 + ':'+n2+':m0.0:t01:z+0.00:a+0.00.PHOENIXconv.fits'
+		pyfits.writeto(outname,icdata,clobber=True)
+		print('convolving '+ str(ii+1) +' out of ' + str(len(infns)))
+   
+    
 def make_wifes_p08_template(ddir, fn, out_dir, star,rv=0.0):
     """From a p08 file, create a template spectrum for future cross-correlation.
     The template is interpolated onto a 0.1 Angstrom grid (to match higher resolution 
@@ -178,7 +226,7 @@ def rv_fit_mlnlike(shift,modft,data,errors,gaussian_offset):
 
     
 def calc_rv_template(spect,wave,sig, template_conv_dir,bad_intervals,smooth_distance=101, \
-    gaussian_offset=1e-4,nwave_log=1e4,oversamp=1,fig_fn='',convolve_template=True):
+    gaussian_offset=1e-4,nwave_log=1e4,oversamp=1,fig_fn='',convolve_template=True,starnumber=0):
     """Compute a radial velocity based on an best fitting template spectrum.
     Teff is estimated at the same time.
     
@@ -220,6 +268,8 @@ def calc_rv_template(spect,wave,sig, template_conv_dir,bad_intervals,smooth_dist
     wave_log = np.min(wave)*np.exp( np.log(np.max(wave)/np.min(wave))/nwave_log*np.arange(nwave_log))
     #Interpolate the spectrum onto this scale
     spect_int = np.interp(wave_log,wave,spect)
+    ##pdb.set_trace()
+    
     #!!! Testing !!!
     #spect_int = np.roll(spect_int,+1) #redshift, positive RV
     sig_int = np.interp(wave_log,wave,sig)
@@ -276,6 +326,8 @@ def calc_rv_template(spect,wave,sig, template_conv_dir,bad_intervals,smooth_dist
         cor = np.correlate(spect_int,template_int,'same')
         peaks[i] = np.max(cor)/np.sqrt(np.sum(np.abs(template_int)**2))
         rvs[i] = (np.argmax(cor) - nwave_log/2)*drv 
+        if starnumber == 0: print('Correlating Template ' + str(i+1)+' out of ' + str(len(template_fns)))
+        if starnumber >0  : print('Correlating Template ' + str(i+1)+' out of ' + str(len(template_fns)) +' for star '+str(starnumber))
     ix = np.argmax(peaks)
     #Recompute and plot the best cross-correlation
     template_int = template_ints[ix,:]
@@ -292,7 +344,7 @@ def calc_rv_template(spect,wave,sig, template_conv_dir,bad_intervals,smooth_dist
     if name[0]=='p':
         name = name[1:]
         name_string = 'T = ' + name + ' K'
-
+	##pdb.set_trace()
     #Fit for a precise RV... note that minimize (rather than minimize_scalar) failed more
     #often for spectra that were not good matches.
     modft = np.fft.rfft(template_int)
@@ -335,16 +387,20 @@ def rv_process_dir(ddir,template_conv_dir='./ambre_conv/',standards_dir='',outfn
         Directory containing template spectra convolved to WiFeS resolution
     outfn: string
         Output filename"""
+        
     if len(standards_dir)>0:
         print("WARNING: Feature not implemented yet")
         raise UserWarning
     fns = glob.glob(ddir + '/*p08.fits'  )
+##    pdb.set_trace()
+    ##fns = fns[17:18]
     # If an out directory isn't given, use the data directory.
     if len(outdir)==0:
         outdir=ddir
     outfile = open(outdir + '/' + outfn,'w')
     texfile = open(outdir + '/' + texfn,'w')
-    for fn in fns:
+    for iii,fn in enumerate(fns):
+    	##pdb.set_trace()
         h = pyfits.getheader(fn)
         flux,wave = read_and_find_star_p08(fn,fig_fn=outdir + '/'+ h['OBJNAME'] + '.' + h['OBSID'] + '_star.png')
         if h['BEAMSPLT']=='RT560':
@@ -358,7 +414,7 @@ def rv_process_dir(ddir,template_conv_dir='./ambre_conv/',standards_dir='',outfn
             specfile.write('{0:6.2f},{1:6.1f},{2:6.1f}\n'.format(wave[i],spectrum[i],sig[i]))
         specfile.close()
         rv,rv_sig,name = calc_rv_template(spectrum,wave,sig,template_conv_dir, bad_intervals,\
-            fig_fn=outdir + '/' + h['OBJNAME'] + '.' + h['OBSID'] + '_xcor.png')
+            fig_fn=outdir + '/' + h['OBJNAME'] + '.' + h['OBSID'] + '_xcor.png',starnumber=iii+1)
         #Make the Heliocentric correction...
         rv += h['RADVEL']
         outfile.write(h['OBJNAME'] + ','+fn +','+ h['RA'] + ','+ h['DEC'] + ',' + h['BEAMSPLT'] + \

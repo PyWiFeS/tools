@@ -324,11 +324,14 @@ def calc_rv_template(spect,wave,sig, template_conv_dir,bad_intervals,smooth_dist
         template_int -= np.convolve(template_int,np.ones(smooth_distance)/smooth_distance,'same')
         template_ints[i,:] =  template_int
         cor = np.correlate(spect_int,template_int,'same')
-        peaks[i] = np.max(cor)/np.sqrt(np.sum(np.abs(template_int)**2))
-        rvs[i] = (np.argmax(cor) - nwave_log/2)*drv 
+        ##here it's a good idea to limit where the peak Xcorrelation can be, only search for a peak within 1000 of rv=0
+        ## that's and RV range of -7780 to 7780 for the default spacings in the code
+        peaks[i] = np.max(cor[nwave_log/2-1000:nwave_log/2+1000])/np.sqrt(np.sum(np.abs(template_int)**2))
+        rvs[i] = (np.argmax(cor[nwave_log/2-1000:nwave_log/2+1000])-1000)*drv 
         if starnumber == 0: print('Correlating Template ' + str(i+1)+' out of ' + str(len(template_fns)))
         if starnumber >0  : print('Correlating Template ' + str(i+1)+' out of ' + str(len(template_fns)) +' for star '+str(starnumber))
     ix = np.argmax(peaks)
+    #pdb.set_trace()
     #Recompute and plot the best cross-correlation
     template_int = template_ints[ix,:]
     cor = np.correlate(spect_int,template_int,'same')
@@ -354,7 +357,8 @@ def calc_rv_template(spect,wave,sig, template_conv_dir,bad_intervals,smooth_dist
     #x = res.x
     #fval = res.fun
     x,fval,ierr,numfunc = op.fminbound(rv_fit_mlnlike,rvs[ix]/drv-2,rvs[ix]/drv+2/drv,args=(modft,spect_int,sig_int,gaussian_offset),full_output=True)
-    rv = x*drv
+    rv = x*drv	
+    #pdb.set_trace()
     fplus = rv_fit_mlnlike(x+0.5,modft,spect_int,sig_int,gaussian_offset)
     fminus = rv_fit_mlnlike(x-0.5,modft,spect_int,sig_int,gaussian_offset)
     hess_inv = 0.5**2/(fplus +  fminus - 2*fval)
@@ -392,8 +396,9 @@ def rv_process_dir(ddir,template_conv_dir='./ambre_conv/',standards_dir='',outfn
         print("WARNING: Feature not implemented yet")
         raise UserWarning
     fns = glob.glob(ddir + '/*p08.fits'  )
-##    pdb.set_trace()
-    ##fns = fns[17:18]
+  	#Uncomment to test individual stars in a data-set
+  	#pdb.set_trace()
+    #fns = fns[5:6]
     # If an out directory isn't given, use the data directory.
     if len(outdir)==0:
         outdir=ddir
@@ -404,7 +409,7 @@ def rv_process_dir(ddir,template_conv_dir='./ambre_conv/',standards_dir='',outfn
         h = pyfits.getheader(fn)
         flux,wave = read_and_find_star_p08(fn,fig_fn=outdir + '/'+ h['OBJNAME'] + '.' + h['OBSID'] + '_star.png')
         if h['BEAMSPLT']=='RT560':
-            bad_intervals = ([0,5500],[6862,7020],)
+            bad_intervals = ([0,5500],[6860,7020],)
         else:
             bad_intervals = ([6862,7020],)
         spectrum,sig = weighted_extract_spectrum(flux)

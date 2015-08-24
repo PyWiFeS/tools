@@ -11,12 +11,6 @@ rv_process_dir = process_stellar.rv_process_dir
 
 ##RUNNING RV FITTER ON DATA
 ##Executing from the code directory:
-rv_process_dir('/Volumes/UTRAID/wifes_data/140623/reduction_red_150806',template_conv_dir='./phoenix_conv/',outdir='arizz_outputs')
+rv_process_dir('/Volumes/UTRAID/wifes_data/140623/reduction_red_150806',
+template_conv_dir='./phoenix_conv/',outdir='arizz_outputs/phoenix_outputs')
 
-#fn = 'T2m3wr-20140617.144009-0167.p11.fits'
-#flux,sig,wave = read_and_find_star_p11(fn)
-
-#fn = 'T2m3wr-20140617.144009-0167.p08.fits'
-#flux,wave = read_and_find_star_p08(fn)
-#spectrum,sig = weighted_extract_spectrum(flux)
-#rv,rv_sig,temp = calc_rv_templates(spectrum,wave,sig,'template_conv', ([0,5400],[6870,6890]))

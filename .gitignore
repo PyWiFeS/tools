@@ -1,0 +1,18 @@
+##compiled codes
+*.pyc
+
+##pickle files
+*.pkl
+
+##IDL saves
+*.idlsave
+
+##packaged files
+*.7z
+*.dmg
+*.gz
+*.iso
+*.jar
+*.rar
+*.tar
+*.zip

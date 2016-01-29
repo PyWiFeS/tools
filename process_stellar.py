@@ -27,6 +27,7 @@ import matplotlib.pyplot as plt
 import scipy.optimize as op
 import pdb
 import glob
+import pickle
 from readcol import readcol
 
 def read_and_find_star_p11(fn, manual_click=False, npix=7, subtract_sky=True,sky_rad=2):
@@ -278,6 +279,7 @@ def calc_rv_template(spect,wave,sig, template_conv_dir,bad_intervals,smooth_dist
     spect_int /= np.median(spect_int)
     #Remove bad intervals 
     for interval in bad_intervals:
+    	#pdb.set_trace()
         wlo = np.where(wave_log > interval[0])[0]
         if len(wlo)==0: 
             continue
@@ -325,18 +327,24 @@ def calc_rv_template(spect,wave,sig, template_conv_dir,bad_intervals,smooth_dist
         template_ints[i,:] =  template_int
         cor = np.correlate(spect_int,template_int,'same')
         ##here it's a good idea to limit where the peak Xcorrelation can be, only search for a peak within 1000 of rv=0
-        ## that's and RV range of -7780 to 7780 for the default spacings in the code
-        peaks[i] = np.max(cor[nwave_log/2-1000:nwave_log/2+1000])/np.sqrt(np.sum(np.abs(template_int)**2))
-        rvs[i] = (np.argmax(cor[nwave_log/2-1000:nwave_log/2+1000])-1000)*drv 
+        ## that's and RV range of -778 to 778 for the default spacings in the code
+        peaks[i] = np.max(cor[nwave_log/2-100:nwave_log/2+100])/np.sqrt(np.sum(np.abs(template_int)**2))
+        rvs[i] = (np.argmax(cor[nwave_log/2-100:nwave_log/2+100])-100)*drv 
         if starnumber == 0: print('Correlating Template ' + str(i+1)+' out of ' + str(len(template_fns)))
         if starnumber >0  : print('Correlating Template ' + str(i+1)+' out of ' + str(len(template_fns)) +' for star '+str(starnumber))
     ix = np.argmax(peaks)
-    #pdb.set_trace()
+   # pdb.set_trace()
     #Recompute and plot the best cross-correlation
     template_int = template_ints[ix,:]
     cor = np.correlate(spect_int,template_int,'same')
     plt.clf()
     plt.plot(drv*(np.arange(2*smooth_distance)-smooth_distance), cor[nwave_log/2-smooth_distance:nwave_log/2+smooth_distance])
+
+    ##store the figure data for later use
+    outsave = np.array([drv*(np.arange(2*smooth_distance)-smooth_distance),cor[nwave_log/2-smooth_distance:nwave_log/2+smooth_distance]])
+    saveoutname = fig_fn.split('.png')[0] + "_figdat.pkl"
+    pickle.dump(outsave,open(saveoutname,"wb"))
+    
     plt.xlabel('Velocity (km/s)')
     plt.ylabel('X Correlation')
     fn_ix = template_fns[ix].rfind('/')
@@ -347,7 +355,7 @@ def calc_rv_template(spect,wave,sig, template_conv_dir,bad_intervals,smooth_dist
     if name[0]=='p':
         name = name[1:]
         name_string = 'T = ' + name + ' K'
-	##pdb.set_trace()
+	#pdb.set_trace()
     #Fit for a precise RV... note that minimize (rather than minimize_scalar) failed more
     #often for spectra that were not good matches.
     modft = np.fft.rfft(template_int)
@@ -356,8 +364,10 @@ def calc_rv_template(spect,wave,sig, template_conv_dir,bad_intervals,smooth_dist
     #res = op.minimize_scalar(rv_fit_mlnlike,args=(modft,spect_int,sig_int,gaussian_offset),bounds=((rvs[ix]-1)/drv,(rvs[ix]+1)/drv))
     #x = res.x
     #fval = res.fun
-    x,fval,ierr,numfunc = op.fminbound(rv_fit_mlnlike,rvs[ix]/drv-2,rvs[ix]/drv+2/drv,args=(modft,spect_int,sig_int,gaussian_offset),full_output=True)
+    x,fval,ierr,numfunc = op.fminbound(rv_fit_mlnlike,rvs[ix]/drv-2/drv,rvs[ix]/drv+2/drv,args=(modft,spect_int,sig_int,gaussian_offset),full_output=True)
     rv = x*drv	
+    ##best model 
+    shifted_mod = np.fft.irfft(modft * np.exp(-2j * np.pi * np.arange(len(modft))/len(spect_int) * x))
     #pdb.set_trace()
     fplus = rv_fit_mlnlike(x+0.5,modft,spect_int,sig_int,gaussian_offset)
     fminus = rv_fit_mlnlike(x-0.5,modft,spect_int,sig_int,gaussian_offset)
@@ -366,7 +376,7 @@ def calc_rv_template(spect,wave,sig, template_conv_dir,bad_intervals,smooth_dist
         #If you get here, then there is a problem with the input spectrum or fitting.
         #raise UserWarning
         print("WARNING: Radial velocity fit did not work - trying again with wider range for: " + fig_fn)
-        x,fval,ierr,numfunc = op.fminbound(rv_fit_mlnlike,rvs[ix]/drv-4,rvs[ix]/drv+4/drv,args=(modft,spect_int,sig_int,gaussian_offset),full_output=True)
+        x,fval,ierr,numfunc = op.fminbound(rv_fit_mlnlike,rvs[ix]/drv-8/drv,rvs[ix]/drv+8/drv,args=(modft,spect_int,sig_int,gaussian_offset),full_output=True)
         rv = x*drv
         fplus = rv_fit_mlnlike(x+0.5,modft,spect_int,sig_int,gaussian_offset)
         fminus = rv_fit_mlnlike(x-0.5,modft,spect_int,sig_int,gaussian_offset)
@@ -378,9 +388,22 @@ def calc_rv_template(spect,wave,sig, template_conv_dir,bad_intervals,smooth_dist
     plt.title(name_string + ', RV = {0:4.1f}+/-{1:4.1f} km/s'.format(rv,rv_sig))
     if len(fig_fn) > 0:
         plt.savefig(fig_fn)
+    plt.clf()
+    plt.plot(wave_log,spect_int)
+    plt.plot(wave_log,shifted_mod)
+    plt.xlim([6400.0,6700.0])
+    plt.title(name_string + ', RV = {0:4.1f}+/-{1:4.1f} km/s'.format(rv,rv_sig))
+    if len(fig_fn) > 0:
+        fig_fn_new = fig_fn.split('_xcor.png')[0] + 'fitplot.png' 
+    	plt.savefig(fig_fn_new)
+    #again save the figure data for use later in making nicer plots with IDL
+    outsave = np.array([wave_log,spect_int,shifted_mod])
+    saveoutname = fig_fn.split('_xcor.png')[0] + 'fitplot_figdat.pkl'
+    pickle.dump(outsave,open(saveoutname,"wb"))
+   # pdb.set_trace()
     return rv,rv_sig,name
     
-def rv_process_dir(ddir,template_conv_dir='./ambre_conv/',standards_dir='',outfn='rvs.txt',texfn='rvs.tex',outdir=''):
+def rv_process_dir(ddir,template_conv_dir='./ambre_conv/',standards_dir='',outfn='rvs.txt',texfn='rvs.tex',outdir='',mask_ha_emission=False):
     """Process all files in a directory for radial velocities.
     
     Parameters
@@ -397,21 +420,37 @@ def rv_process_dir(ddir,template_conv_dir='./ambre_conv/',standards_dir='',outfn
         raise UserWarning
     fns = glob.glob(ddir + '/*p08.fits'  )
   	#Uncomment to test individual stars in a data-set
-  	#pdb.set_trace()
-    #fns = fns[5:6]
+    #pdb.set_trace()
+    #fns = fns[32:33]
     # If an out directory isn't given, use the data directory.
     if len(outdir)==0:
         outdir=ddir
     outfile = open(outdir + '/' + outfn,'w')
+    outfile.write('#name,filename,ra,dec,bmsplt,mjd,rv,sig_rv,teff \n')
     texfile = open(outdir + '/' + texfn,'w')
     for iii,fn in enumerate(fns):
     	##pdb.set_trace()
         h = pyfits.getheader(fn)
-        flux,wave = read_and_find_star_p08(fn,fig_fn=outdir + '/'+ h['OBJNAME'] + '.' + h['OBSID'] + '_star.png')
+        flux,wave = read_and_find_star_p08(fn,fig_fn=outdir + '/'+ h['OBJNAME'] + '.' + h['OBSID'] + '_star.png')  		
         if h['BEAMSPLT']=='RT560':
             bad_intervals = ([0,5500],[6860,7020],)
         else:
             bad_intervals = ([6862,7020],)
+    ##Maybe here decide if the star is e.g. a young K/M dwarf with lots of H-alpha emission and 
+        ##bad_interval out that section of spectrum this also works to remove Ae/Be emission which causes issues       
+        #pdb.set_trace()
+        if mask_ha_emission == True:
+            simple_spec = np.sum(np.sum(flux,axis=0),axis=0)
+            harng = np.where((wave > 6560.0) & (wave < 6565.0))[0] 
+            crng  = np.where((wave > 6500.0) & (wave < 6520.0))[0]
+            cmed  = np.median(simple_spec[crng])
+            hamed = np.median(simple_spec[harng])
+            scmed = np.std(simple_spec[crng])*1.253/len(crng)
+            #pdb.set_trace()
+            if hamed > 5.0*scmed+cmed: bad_intervals = bad_intervals+([6550,6580],)
+            print('Removing H-alpha line due to emission')
+    	##pdb.set_trace()
+    
         spectrum,sig = weighted_extract_spectrum(flux)
         specfn = outdir + '/' + fn[fn.rfind('/')+1:] + '.spec.csv'
         specfile = open(specfn,'w')

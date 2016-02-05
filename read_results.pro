@@ -8,23 +8,38 @@
 ;stop
 ;;pulkovo catalog of radial velocities for HIP stars
 restore, '~/data_local/catalogs/pulkovo_rv/pulkovo.idlsave'
+restore, '~/data_local/catalogs/hip_main.dat'
 do_outtex=0
+do_outcsv=1
 
-data = read_csv('arizz_outputs/140623/phoenix/rvs.txt',string='name,filename,bmsplt,ra,dec')
-outtex = 'rv_140623_phoenix.tex'
+;data = read_csv('arizz_outputs/140623/phoenix/rvs.txt',string='name,filename,bmsplt,ra,dec')
+;outtex = 'arizz_outputs/outputs/rv_140623_hip.tex'
+;outcsv = 'arizz_outputs/outputs/rv_140623_hip.csv'
+;restore, '~/code/wifes_dr/afterpython/reduction_outputs/ewinspect_140623_specdat_140823_sptsnipe.idlsave'
+;restore, '~/code/wifes_dr/afterpython/reduction_outputs/ewinspect_140623_specdat_140823.idlsave'
 
 ;data = read_csv('arizz_outputs/140622/phoenix/rvs.txt',string='name,filename,bmsplt,ra,dec')
-;outtex = 'rv_140622_phoenix.tex'
+;outtex = 'rv_140622_hip.tex'
+;outcsv = 'arizz_outputs/outputs/rv_140622_hip.csv'
+;restore, '~/code/wifes_dr/afterpython/reduction_outputs/ewinspect_140622_specdat_140822_sptsnipe.idlsave'
+;restore, '~/code/wifes_dr/afterpython/reduction_outputs/ewinspect_140622_specdat_140822.idlsave'
+
+;stop
 
 ;data = read_csv('arizz_outputs/140621/phoenix/rvs.txt',string='name,filename,bmsplt,ra,dec')
 ;outtex = 'rv_140621_phoenix.tex'
+;outcsv = 'arizz_outputs/outputs/rv_140621_hip.csv'
+;restore, '~/code/wifes_dr/afterpython/reduction_outputs/ewinspect_140621_specdat_140821_sptsnipe.idlsave'
+;restore, '~/code/wifes_dr/afterpython/reduction_outputs/ewinspect_140621_specdat_140821.idlsave'
+ 
 
-;data = read_csv('arizz_outputs/140619/phoenix/rvs.txt',string='name,filename,bmsplt,ra,dec')
-;outtex = 'rv_140619_phoenix.tex'
+data = read_csv('arizz_outputs/140619/phoenix/rvs.txt',string='name,filename,bmsplt,ra,dec')
+outtex = 'rv_140619_phoenix.tex'
+outcsv = 'arizz_outputs/outputs/rv_140619_hip.csv'
+restore, '~/code/wifes_dr/afterpython/reduction_outputs/ewinspect_140619_specdat_140816_sptsnipe.idlsave'
+restore, '~/code/wifes_dr/afterpython/reduction_outputs/ewinspect_140619_specdat_140816.idlsave'
 
-
-;;outfile = 'rv_140622_phoenix.txt'
-;outtex = 'rv_140622_phoenix.tex'
+spts = out
 
 rvstan = read_csv('rv_standards.txt',string='name')
 
@@ -39,7 +54,7 @@ for i=0,n_elements(data.name)-1 do begin
 endfor
 xrv = where(sig_rvx gt 0)
 ;;exclude an RV standard here if there is a good reason to do so:
-;xrv = xrv[1:*]
+;;xrv = xrv[1:*]
 
 ;;derive the radial velocity calibration in the simplest way possible
 myfun = 'X+p[0]'
@@ -58,9 +73,11 @@ print, 'RV Offset: ' + nform(rv_offset,dec=3)+' +- ' + nform(rv_offerr,dec=3)
 rvs = data.rv-rv_offset[0]
 sig_rvs = data.sig_rv + rv_offerr[0]
 
+
 ;;cross match everything in Pulkovo with the data
 rvp     = fltarr(n_elements(data.name))-9999
 sig_rvp = rvp
+
 for i=0,n_elements(data.name)-1 do begin
    if strmid(data.name[i],0,3) eq 'HIP' then begin
       thiship = fix((strsplit(data.name[i],' ',/extract))[1],type=3)
@@ -77,6 +94,38 @@ pm = where(rvp gt -9998)
 qwe = where(strmid(data.name,0,3) eq 'HIP')
 sorter = sort(data.name[qwe])
 stop
+
+out = where(strmid(data.name,0,3) eq 'HIP')
+numxrv = nform(n_elements(xrv))
+if do_outcsv eq 1 then begin
+   close,/all
+   openw,1,outcsv
+   printf,1,'HIP,RA,DEC,SpT(HD),SpT(WiFeS),rv,sig_rv,rv_off,sig_rv_off,n_rvstan,crv,sig_crv'
+   for i=0,n_elements(out)-1 do begin
+      thiship = fix(strmid(data.name[out[i]],3,10),type=3)
+      xhip = where(hip_main.hip eq thiship)
+      if xhip[0] eq -1 then stop
+      hdcat = queryvizier('III/135A/catalog','HIP_'+nform(thiship,decimals=0),1.0,/allcolumns)
+      if size(hdcat,/type) eq 8 then hashd=1 else hashd=0
+      hdspt=''
+      if hashd eq 1 then begin
+         if n_elements(hdcat) gt 1 then stop
+         hdspt = hdcat.spt
+      endif
+
+      gcirc,2,hip_main[xhip].alf*180/!PI,hip_main[xhip].del*180/!Pi,spec_dat.ra,spec_dat.dec,dist
+      smatch = where(dist eq min(dist))
+      if n_elements(smatch) gt 1 then stop
+      if smatch[0] eq -1 then stop
+      thisspt = spts[smatch].spts
+      printf,1,nform(thiship,dec=0)+','+nform(hip_main[xhip].alf*180/!pi,dec=6)+','+nform(hip_main[xhip].del*180/!pi,dec=6)+','+ hdspt+','+strupcase(thisspt)+','+nform(data.rv[out[i]],dec=1)+','+nform(data.sig_rv[out[i]],dec=1)+','+nform(rv_offset,dec=3)+','+nform(rv_offerr,dec=3)+','+numxrv+','+nform(rvs[out[i]],dec=1) +','+nform(sig_rvs[out[i]],dec=1)
+    ;stop
+
+   endfor
+endif
+close,1
+stop
+
 
 
 

@@ -12,9 +12,13 @@ fn = 'T2m3wr-20140617.144009-0167.p11.fits'
 flux,sig,wave = read_and_find_star_p11(fn)
 
 fn = 'T2m3wr-20140617.144009-0167.p08.fits'
+fn = '/Users/mireland/data/wifes/141110/blue/T2m3wb-20141110.093650-0803.p08.fits'
 flux,wave = read_and_find_star_p08(fn)
 spectrum,sig = weighted_extract_spectrum(flux)
 rv,rv_sig,temp = calc_rv_templates(spectrum,wave,sig,'template_conv', ([0,5400],[6870,6890]))
+
+calc_rv_todcor(spectrum,wave,sig,['RV_templates/9000g40p00k2v150.txt','RV_templates/5250g35p00k2v150.txt'])
+
 """
 
 from __future__ import print_function
@@ -29,6 +33,7 @@ import pdb
 import glob
 import pickle
 from readcol import readcol
+from mpl_toolkits.mplot3d import Axes3D
 
 def read_and_find_star_p11(fn, manual_click=False, npix=7, subtract_sky=True,sky_rad=2):
     """Read in a cube and find the star.
@@ -401,6 +406,136 @@ def calc_rv_template(spect,wave,sig, template_conv_dir,bad_intervals,smooth_dist
     saveoutname = fig_fn.split('_xcor.png')[0] + 'fitplot_figdat.pkl'
     pickle.dump(outsave,open(saveoutname,"wb"))
    # pdb.set_trace()
+    return rv,rv_sig,name
+        
+def calc_rv_todcor(spect,wave,sig, template_fns,bad_intervals=[],fig_fn='',\
+    smooth_distance=201,convolve_template=True, alpha=0.3,\
+    nwave_log=int(1e4),ncor=1000):
+    """Compute a radial velocity based on an best fitting template spectrum.
+    Teff is estimated at the same time.
+    
+    Parameters
+    ----------
+    spect: array-like
+        The reduced WiFeS spectrum
+        
+    wave: array-like
+        The wavelengths corresponding to the reduced WiFeS spectrum
+        
+    template_fns: string
+        Spectral template for star 1 and star 2 that can be read in by np.loadtxt
+        
+    bad_intervals: 
+        List of wavelength intervals where e.g. telluric absorption is bad. For todcor,
+        These can only be smoothed over.
+        
+    smooth_distance: float
+        Distance to smooth for "continuum" correction
+        
+        
+    Returns
+    -------
+    rv: float
+        Radial velocities in km/s
+    rv_sig: float
+        Uncertainty in radial velocity (NB assumes good model fit)
+    """
+    #*** Lines below here are in common and should be their own routine !!!
+    wave_log = np.min(wave)*np.exp( np.log(np.max(wave)/np.min(wave))/nwave_log*np.arange(nwave_log))
+    #Interpolate the spectrum onto this scale
+    spect_int = np.interp(wave_log,wave,spect)
+    sig_int = np.interp(wave_log,wave,sig)
+    #Normalise 
+    sig_int /= np.median(spect_int)
+    spect_int /= np.median(spect_int)
+    #Remove bad intervals 
+    for interval in bad_intervals:
+        wlo = np.where(wave_log > interval[0])[0]
+        if len(wlo)==0: 
+            continue
+        whi = np.where(wave_log > interval[1])[0]
+        if len(whi)==0:
+            whi = [len(wave_log)-1]
+        whi = whi[0]
+        wlo = wlo[0]
+        spect_int[wlo:whi] = spect_int[wlo] + np.arange(whi-wlo,dtype='float')/(whi-wlo)*(spect_int[whi] - spect_int[wlo])
+        sig_int[wlo:whi]=1
+    #Subtract smoothed spectrum
+    spect_int -= spect_int[0] + np.arange(len(spect_int))/(len(spect_int)-1.0)*(spect_int[-1]-spect_int[0])
+    spect_int -= np.convolve(spect_int,np.ones(smooth_distance)/smooth_distance,'same')
+    rvs = np.zeros(len(template_fns))
+    peaks = np.zeros(len(template_fns))
+    template_ints = np.zeros( (len(template_fns),len(wave_log)) )
+    drv = np.log(wave_log[1]/wave_log[0])*2.998e5
+    
+    #Now we find the interpolated template spectra, template_ints
+    for i,template_fn in enumerate(template_fns):
+        try:
+            dd = np.loadtxt(template_fn)
+            dell_template = np.mean(dd[1:,0]-dd[:-1,0])
+            wave_template = dd[:,0]
+            spect_template = dd[:,1]
+        except:
+            spect_template = pyfits.getdata(template_fn)
+            dell_template = 0.1
+            wave_template=np.arange(90000)*dell_template + 3000
+        template_subsamp = int((wave[1]-wave[0])/dell_template)
+        #Make sure it is an odd number to prevent shifting...
+        template_subsamp = np.maximum((template_subsamp//2)*2 - 1,1)
+        
+        spect_template = np.convolve(np.convolve(spect_template,np.ones(template_subsamp)/template_subsamp,'same'),\
+                                  np.ones(2*template_subsamp+1)/(2*template_subsamp+1),'same')
+        #Interpolate onto the log wavelength grid.
+        template_int = np.interp(wave_log,wave_template,spect_template)
+        #Normalise 
+        template_int /= np.median(template_int)
+        #Remove bad intervals 
+        for interval in bad_intervals:
+            wlo = np.where(wave_log > interval[0])[0]
+            if len(wlo)==0: 
+                continue
+            whi = np.where(wave_log > interval[1])[0]
+            if len(whi)==0:
+                whi = [len(wave_log)-1]
+            whi = whi[0]
+            wlo = wlo[0]
+            template_int[wlo:whi] = template_int[wlo] + np.arange(whi-wlo, dtype='float')/(whi-wlo)*(template_int[whi] - template_int[wlo])
+        #Subtract smoothed spectrum
+        template_int -= template_int[0] + np.arange(len(template_int))/(len(template_int)-1.0)*(template_int[-1]-template_int[0])
+        template_int -= np.convolve(template_int,np.ones(smooth_distance)/smooth_distance,'same')
+        template_ints[i,:] =  template_int
+        
+    #*** Next (hopefully with two templates only!) we continue and apply the TODCOR algorithm.    
+    
+    
+    pdb.set_trace()
+
+    c1  = np.fft.irfft(np.fft.rfft(template_ints[0])*np.conj(np.fft.rfft(spect_int)))
+    c1 = np.roll(c1,ncor//2)[:ncor]
+    c2  = np.fft.irfft(np.fft.rfft(template_ints[1])*np.conj(np.fft.rfft(spect_int)))
+    c2 = np.roll(c2,ncor//2)[:ncor]
+    #!!! Unclear which way around this line should be.
+    c12 = np.fft.irfft(np.fft.rfft(template_ints[1])*np.conj(np.fft.rfft(template_ints[0])))
+    c12 = np.roll(c12,ncor//2)[:ncor]
+    ix = np.arange(ncor).astype(int)
+    xy = np.meshgrid(ix,ix)
+    todcor = (c1[xy[0]] + c2[xy[1]])/np.sqrt(1 + 2*alpha*c12[xy[1]-xy[0]]/3 + alpha**2)
+    
+    
+    #plt.plot(drv*(np.arange(nwave_log)-nwave_log//2),np.roll(c1,nwave_log//2))
+    #Figure like TODCOR paper:
+    #fig = plt.figure()
+    #ax = fig.gca(projection='3d') 
+    #ax.plot_surface(xy[0],xy[1],todcor)
+    
+    plt.imshow(todcor, cmap=cm.gray,interpolation='nearest',extent=[-drv*ncor/2,drv*ncor/2,-drv*ncor/2,drv*ncor/2])
+
+    pdb.set_trace()
+
+    #ISSUES: 
+    #1) sign of cross-correlation uncertain above.
+    #2) Normalization of cross-correlation uncertain above.
+
     return rv,rv_sig,name
     
 def rv_process_dir(ddir,template_conv_dir='./ambre_conv/',standards_dir='',outfn='rvs.txt',texfn='rvs.tex',outdir='',mask_ha_emission=False):

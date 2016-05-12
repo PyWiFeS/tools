@@ -410,7 +410,7 @@ def calc_rv_template(spect,wave,sig, template_fns,bad_intervals,smooth_distance=
     #res = op.minimize_scalar(rv_fit_mlnlike,args=(modft,spect_int,sig_int,gaussian_offset),bounds=((rvs[ix]-1)/drv,(rvs[ix]+1)/drv))
     #x = res.x
     #fval = res.fun
-    x,fval,ierr,numfunc = op.fminbound(rv_fit_mlnlike,rvs[ix]/drv-2/drv,rvs[ix]/drv+2/drv,args=(modft,spect_int,sig_int,gaussian_offset),full_output=True)
+    x,fval,ierr,numfunc = op.fminbound(rv_fit_mlnlike,rvs[ix]/drv-5/drv,rvs[ix]/drv+5/drv,args=(modft,spect_int,sig_int,gaussian_offset),full_output=True)
     rv = x*drv	
     ##best model 
     shifted_mod = np.fft.irfft(modft * np.exp(-2j * np.pi * np.arange(len(modft))/len(spect_int) * x))
@@ -418,16 +418,16 @@ def calc_rv_template(spect,wave,sig, template_fns,bad_intervals,smooth_distance=
     fplus = rv_fit_mlnlike(x+0.5,modft,spect_int,sig_int,gaussian_offset)
     fminus = rv_fit_mlnlike(x-0.5,modft,spect_int,sig_int,gaussian_offset)
     hess_inv = 0.5**2/(fplus +  fminus - 2*fval)
-    if hess_inv < 0:
+    if (hess_inv < 0) | (fplus < fval) | (fminus < fval):
         #If you get here, then there is a problem with the input spectrum or fitting.
         #raise UserWarning
         print("WARNING: Radial velocity fit did not work - trying again with wider range for: " + fig_fn)
-        x,fval,ierr,numfunc = op.fminbound(rv_fit_mlnlike,rvs[ix]/drv-8/drv,rvs[ix]/drv+8/drv,args=(modft,spect_int,sig_int,gaussian_offset),full_output=True)
+        x,fval,ierr,numfunc = op.fminbound(rv_fit_mlnlike,rvs[ix]/drv-10/drv,rvs[ix]/drv+10/drv,args=(modft,spect_int,sig_int,gaussian_offset),full_output=True)
         rv = x*drv
         fplus = rv_fit_mlnlike(x+0.5,modft,spect_int,sig_int,gaussian_offset)
         fminus = rv_fit_mlnlike(x-0.5,modft,spect_int,sig_int,gaussian_offset)
         hess_inv = 0.5**2/(fplus +  fminus - 2*fval)
-        if hess_inv < 0:
+        if (hess_inv < 0) | (fplus < fval) | (fminus < fval):
             print("WARNING: Radial velocity fit did not work, giving up with NaN uncertainty")
         
     rv_sig = np.sqrt(hess_inv*nwave_log/len(spect)/oversamp)*drv

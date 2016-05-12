@@ -15,10 +15,10 @@ fn = 'T2m3wr-20140617.144009-0167.p08.fits'
 fn = '/Users/mireland/data/wifes/141110/blue/T2m3wb-20141110.093650-0803.p08.fits'
 flux,wave = read_and_find_star_p08(fn)
 spectrum,sig = weighted_extract_spectrum(flux)
-rv,rv_sig,temp = calc_rv_templates(spectrum,wave,sig,'template_conv', ([0,5400],[6870,6890]))
+rv,rv_sig = calc_rv_template(spectrum,wave,sig,'template_conv', ([0,5400],[6870,6890]))
 
 calc_rv_todcor(spectrum,wave,sig,['RV_templates/9000g40p00k2v150.txt','RV_templates/5250g35p00k2v150.txt'])
-
+rv,rv_sig = calc_rv_template(spectrum,wave,sig,template_fns, ([0,5400],[6870,6890]))
 """
 
 from __future__ import print_function
@@ -230,8 +230,91 @@ def rv_fit_mlnlike(shift,modft,data,errors,gaussian_offset):
     shifted_mod = np.fft.irfft(modft * np.exp(-2j * np.pi * np.arange(len(modft))/len(data) * shift))
     return -np.sum(np.log(np.exp(-(data - shifted_mod)**2/2.0/errors**2) + gaussian_offset))
 
+def interpolate_spectra_onto_log_grid(spect,wave,sig, template_fns,bad_intervals=[],\
+        smooth_distance=201,convolve_template=True, nwave_log=int(1e4)):
+    """Interpolate both the target and template spectra onto a common wavelength grid"""
     
-def calc_rv_template(spect,wave,sig, template_conv_dir,bad_intervals,smooth_distance=101, \
+    #Create our logarithmic wavelength scale with the same min and max wavelengths as the
+    #target spectrum, and nwave_log wavelengths.
+    wave_log = np.min(wave)*np.exp( np.log(np.max(wave)/np.min(wave))/\
+        nwave_log*np.arange(nwave_log))
+    
+    #Interpolate the target spectrum onto this scale
+    spect_int = np.interp(wave_log,wave,spect)
+    sig_int = np.interp(wave_log,wave,sig)
+    
+    #Normalise 
+    sig_int /= np.median(spect_int)
+    spect_int /= np.median(spect_int)
+    
+    #Remove bad intervals 
+    for interval in bad_intervals:
+        wlo = np.where(wave_log > interval[0])[0]
+        if len(wlo)==0: 
+            continue
+        whi = np.where(wave_log > interval[1])[0]
+        if len(whi)==0:
+            whi = [len(wave_log)-1]
+        whi = whi[0]
+        wlo = wlo[0]
+        spect_int[wlo:whi] = spect_int[wlo] + np.arange(whi-wlo,dtype='float')/(whi-wlo)*(spect_int[whi] - spect_int[wlo])
+        sig_int[wlo:whi]=1
+    
+    #Subtract smoothed spectrum
+    spect_int -= spect_int[0] + np.arange(len(spect_int))/(len(spect_int)-1.0)*(spect_int[-1]-spect_int[0])
+    spect_int -= np.convolve(spect_int,np.ones(smooth_distance)/smooth_distance,'same')
+    
+    #Now we find the interpolated template spectra, template_ints
+    template_ints = np.zeros( (len(template_fns),len(wave_log)) )
+    for i,template_fn in enumerate(template_fns):
+        #Try loading a reduced WiFeS file first... 
+        if template_fn.find("p08")>0:
+            flux,wave_template=read_and_find_star_p08(template_fn)
+            spect_template,dummy = weighted_extract_spectrum(flux)
+            dell_template = np.mean(wave_template[1:]-wave_template[:-1])
+        else:
+            #Next try a template text file (wavelength and flux in 2 columns)
+            try:
+                dd = np.loadtxt(template_fn)
+                dell_template = np.mean(dd[1:,0]-dd[:-1,0])
+                wave_template = dd[:,0]
+                spect_template = dd[:,1]
+            #Finally try the Ambre convolved spectral format.
+            except:
+                spect_template = pyfits.getdata(template_fn)
+                dell_template = 0.1
+                wave_template=np.arange(90000)*dell_template + 3000
+            
+        #Amount of subsampling in the template
+        template_subsamp = int((wave[1]-wave[0])/dell_template)
+        #Make sure it is an odd number to prevent shifting...
+        template_subsamp = np.maximum((template_subsamp//2)*2 - 1,1)
+        
+        spect_template = np.convolve(np.convolve(spect_template,np.ones(template_subsamp)/template_subsamp,'same'),\
+                                  np.ones(2*template_subsamp+1)/(2*template_subsamp+1),'same')
+        #Interpolate onto the log wavelength grid.
+        template_int = np.interp(wave_log,wave_template,spect_template)
+        #Normalise 
+        template_int /= np.median(template_int)
+        #Remove bad intervals 
+        for interval in bad_intervals:
+            wlo = np.where(wave_log > interval[0])[0]
+            if len(wlo)==0: 
+                continue
+            whi = np.where(wave_log > interval[1])[0]
+            if len(whi)==0:
+                whi = [len(wave_log)-1]
+            whi = whi[0]
+            wlo = wlo[0]
+            template_int[wlo:whi] = template_int[wlo] + np.arange(whi-wlo, dtype='float')/(whi-wlo)*(template_int[whi] - template_int[wlo])
+        #Subtract smoothed spectrum
+        template_int -= template_int[0] + np.arange(len(template_int))/(len(template_int)-1.0)*(template_int[-1]-template_int[0])
+        template_int -= np.convolve(template_int,np.ones(smooth_distance)/smooth_distance,'same')
+        template_ints[i,:] =  template_int
+        
+    return wave_log, spect_int, sig_int, template_ints
+    
+def calc_rv_template(spect,wave,sig, template_fns,bad_intervals,smooth_distance=101, \
     gaussian_offset=1e-4,nwave_log=1e4,oversamp=1,fig_fn='',convolve_template=True,starnumber=0):
     """Compute a radial velocity based on an best fitting template spectrum.
     Teff is estimated at the same time.
@@ -269,67 +352,18 @@ def calc_rv_template(spect,wave,sig, template_conv_dir,bad_intervals,smooth_dist
     temp: int
         Temperature of model spectrum used for cross-correlation.
     """
-    dell_template = 0.1
-    wave_template=np.arange(90000)*dell_template + 3000
-    wave_log = np.min(wave)*np.exp( np.log(np.max(wave)/np.min(wave))/nwave_log*np.arange(nwave_log))
-    #Interpolate the spectrum onto this scale
-    spect_int = np.interp(wave_log,wave,spect)
-    ##pdb.set_trace()
-    
-    #!!! Testing !!!
-    #spect_int = np.roll(spect_int,+1) #redshift, positive RV
-    sig_int = np.interp(wave_log,wave,sig)
-    #Normalise 
-    sig_int /= np.median(spect_int)
-    spect_int /= np.median(spect_int)
-    #Remove bad intervals 
-    for interval in bad_intervals:
-    	#pdb.set_trace()
-        wlo = np.where(wave_log > interval[0])[0]
-        if len(wlo)==0: 
-            continue
-        whi = np.where(wave_log > interval[1])[0]
-        if len(whi)==0:
-            whi = [len(wave_log)-1]
-        whi = whi[0]
-        wlo = wlo[0]
-        spect_int[wlo:whi] = spect_int[wlo] + np.arange(whi-wlo,dtype='float')/(whi-wlo)*(spect_int[whi] - spect_int[wlo])
-        sig_int[wlo:whi]=1
-    #Subtract smoothed spectrum
-    spect_int -= spect_int[0] + np.arange(len(spect_int))/(len(spect_int)-1.0)*(spect_int[-1]-spect_int[0])
-    spect_int -= np.convolve(spect_int,np.ones(smooth_distance)/smooth_distance,'same')
-    template_fns = glob.glob(template_conv_dir + '/*.fits')
+    #Interpolate the target and template spectra.
+    (wave_log, spect_int, sig_int, template_ints) =  \
+        interpolate_spectra_onto_log_grid(spect,wave,sig, template_fns,\
+            bad_intervals=bad_intervals, smooth_distance=smooth_distance, \
+            convolve_template=convolve_template, nwave_log=nwave_log)
+        
+    #Do a cross-correlation to the nearest "spectral pixel" for each template
+    drv = np.log(wave_log[1]/wave_log[0])*2.998e5
     rvs = np.zeros(len(template_fns))
     peaks = np.zeros(len(template_fns))
-    template_ints = np.zeros( (len(template_fns),len(wave_log)) )
-    drv = np.log(wave_log[1]/wave_log[0])*2.998e5
     for i,template_fn in enumerate(template_fns):
-        #Smooth the template spectrum
-        template_subsamp = int((wave[1]-wave[0])/dell_template)
-        #Make sure it is an odd number to prevent shifting...
-        template_subsamp = np.maximum((template_subsamp//2)*2 - 1,1)
-        spect_template = pyfits.getdata(template_fn)
-        spect_template = np.convolve(np.convolve(spect_template,np.ones(template_subsamp)/template_subsamp,'same'),\
-                                  np.ones(2*template_subsamp+1)/(2*template_subsamp+1),'same')
-        #Interpolate onto the log wavelength grid.
-        template_int = np.interp(wave_log,wave_template,spect_template)
-        #Normalise 
-        template_int /= np.median(template_int)
-        #Remove bad intervals 
-        for interval in bad_intervals:
-            wlo = np.where(wave_log > interval[0])[0]
-            if len(wlo)==0: 
-                continue
-            whi = np.where(wave_log > interval[1])[0]
-            if len(whi)==0:
-                whi = [len(wave_log)-1]
-            whi = whi[0]
-            wlo = wlo[0]
-            template_int[wlo:whi] = template_int[wlo] + np.arange(whi-wlo, dtype='float')/(whi-wlo)*(template_int[whi] - template_int[wlo])
-        #Subtract smoothed spectrum
-        template_int -= template_int[0] + np.arange(len(template_int))/(len(template_int)-1.0)*(template_int[-1]-template_int[0])
-        template_int -= np.convolve(template_int,np.ones(smooth_distance)/smooth_distance,'same')
-        template_ints[i,:] =  template_int
+        template_int = template_ints[i]
         cor = np.correlate(spect_int,template_int,'same')
         ##here it's a good idea to limit where the peak Xcorrelation can be, only search for a peak within 1000 of rv=0
         ## that's and RV range of -778 to 778 for the default spacings in the code
@@ -337,13 +371,16 @@ def calc_rv_template(spect,wave,sig, template_conv_dir,bad_intervals,smooth_dist
         rvs[i] = (np.argmax(cor[nwave_log/2-100:nwave_log/2+100])-100)*drv 
         if starnumber == 0: print('Correlating Template ' + str(i+1)+' out of ' + str(len(template_fns)))
         if starnumber >0  : print('Correlating Template ' + str(i+1)+' out of ' + str(len(template_fns)) +' for star '+str(starnumber))
+    
+    #Find the best cross-correlation.
     ix = np.argmax(peaks)
-   # pdb.set_trace()
+
     #Recompute and plot the best cross-correlation
     template_int = template_ints[ix,:]
     cor = np.correlate(spect_int,template_int,'same')
     plt.clf()
-    plt.plot(drv*(np.arange(2*smooth_distance)-smooth_distance), cor[nwave_log/2-smooth_distance:nwave_log/2+smooth_distance])
+    plt.plot(drv*(np.arange(2*smooth_distance)-smooth_distance), 
+             cor[nwave_log/2-smooth_distance:nwave_log/2+smooth_distance])
 
     ##store the figure data for later use
     outsave = np.array([drv*(np.arange(2*smooth_distance)-smooth_distance),cor[nwave_log/2-smooth_distance:nwave_log/2+smooth_distance]])
@@ -353,13 +390,17 @@ def calc_rv_template(spect,wave,sig, template_conv_dir,bad_intervals,smooth_dist
     plt.xlabel('Velocity (km/s)')
     plt.ylabel('X Correlation')
     fn_ix = template_fns[ix].rfind('/')
+    #Dodgy! Need a better way to find a name for the template.
     fn_ix_delta = template_fns[ix][fn_ix:].find(':')
-    name = template_fns[ix][fn_ix+1:fn_ix+fn_ix_delta]
-    name_string=name
-    #A little messy !!!
-    if name[0]=='p':
-        name = name[1:]
-        name_string = 'T = ' + name + ' K'
+    if fn_ix_delta>0:
+        name = template_fns[ix][fn_ix+1:fn_ix+fn_ix_delta]
+        name_string=name
+        #A little messy !!!
+        if name[0]=='p':
+            name = name[1:]
+            name_string = 'T = ' + name + ' K'
+    name_string = template_fns[ix][fn_ix+1:]
+    
 	#pdb.set_trace()
     #Fit for a precise RV... note that minimize (rather than minimize_scalar) failed more
     #often for spectra that were not good matches.
@@ -406,7 +447,7 @@ def calc_rv_template(spect,wave,sig, template_conv_dir,bad_intervals,smooth_dist
     saveoutname = fig_fn.split('_xcor.png')[0] + 'fitplot_figdat.pkl'
     pickle.dump(outsave,open(saveoutname,"wb"))
    # pdb.set_trace()
-    return rv,rv_sig,name
+    return rv,rv_sig
         
 def calc_rv_todcor(spect,wave,sig, template_fns,bad_intervals=[],fig_fn='',\
     smooth_distance=201,convolve_template=True, alpha=0.3,\
@@ -439,72 +480,16 @@ def calc_rv_todcor(spect,wave,sig, template_fns,bad_intervals=[],fig_fn='',\
         Radial velocities in km/s
     rv_sig: float
         Uncertainty in radial velocity (NB assumes good model fit)
-    """
-    #*** Lines below here are in common and should be their own routine !!!
-    wave_log = np.min(wave)*np.exp( np.log(np.max(wave)/np.min(wave))/nwave_log*np.arange(nwave_log))
-    #Interpolate the spectrum onto this scale
-    spect_int = np.interp(wave_log,wave,spect)
-    sig_int = np.interp(wave_log,wave,sig)
-    #Normalise 
-    sig_int /= np.median(spect_int)
-    spect_int /= np.median(spect_int)
-    #Remove bad intervals 
-    for interval in bad_intervals:
-        wlo = np.where(wave_log > interval[0])[0]
-        if len(wlo)==0: 
-            continue
-        whi = np.where(wave_log > interval[1])[0]
-        if len(whi)==0:
-            whi = [len(wave_log)-1]
-        whi = whi[0]
-        wlo = wlo[0]
-        spect_int[wlo:whi] = spect_int[wlo] + np.arange(whi-wlo,dtype='float')/(whi-wlo)*(spect_int[whi] - spect_int[wlo])
-        sig_int[wlo:whi]=1
-    #Subtract smoothed spectrum
-    spect_int -= spect_int[0] + np.arange(len(spect_int))/(len(spect_int)-1.0)*(spect_int[-1]-spect_int[0])
-    spect_int -= np.convolve(spect_int,np.ones(smooth_distance)/smooth_distance,'same')
+    """  
+    (wave_log, spect_int, sig_int, template_ints) =  \
+        interpolate_spectra_onto_log_grid(spect,wave,sig, template_fns,\
+            bad_intervals=bad_intervals, smooth_distance=smooth_distance, \
+            convolve_template=convolve_template, nwave_log=nwave_log)
+        
     rvs = np.zeros(len(template_fns))
     peaks = np.zeros(len(template_fns))
-    template_ints = np.zeros( (len(template_fns),len(wave_log)) )
     drv = np.log(wave_log[1]/wave_log[0])*2.998e5
-    
-    #Now we find the interpolated template spectra, template_ints
-    for i,template_fn in enumerate(template_fns):
-        try:
-            dd = np.loadtxt(template_fn)
-            dell_template = np.mean(dd[1:,0]-dd[:-1,0])
-            wave_template = dd[:,0]
-            spect_template = dd[:,1]
-        except:
-            spect_template = pyfits.getdata(template_fn)
-            dell_template = 0.1
-            wave_template=np.arange(90000)*dell_template + 3000
-        template_subsamp = int((wave[1]-wave[0])/dell_template)
-        #Make sure it is an odd number to prevent shifting...
-        template_subsamp = np.maximum((template_subsamp//2)*2 - 1,1)
-        
-        spect_template = np.convolve(np.convolve(spect_template,np.ones(template_subsamp)/template_subsamp,'same'),\
-                                  np.ones(2*template_subsamp+1)/(2*template_subsamp+1),'same')
-        #Interpolate onto the log wavelength grid.
-        template_int = np.interp(wave_log,wave_template,spect_template)
-        #Normalise 
-        template_int /= np.median(template_int)
-        #Remove bad intervals 
-        for interval in bad_intervals:
-            wlo = np.where(wave_log > interval[0])[0]
-            if len(wlo)==0: 
-                continue
-            whi = np.where(wave_log > interval[1])[0]
-            if len(whi)==0:
-                whi = [len(wave_log)-1]
-            whi = whi[0]
-            wlo = wlo[0]
-            template_int[wlo:whi] = template_int[wlo] + np.arange(whi-wlo, dtype='float')/(whi-wlo)*(template_int[whi] - template_int[wlo])
-        #Subtract smoothed spectrum
-        template_int -= template_int[0] + np.arange(len(template_int))/(len(template_int)-1.0)*(template_int[-1]-template_int[0])
-        template_int -= np.convolve(template_int,np.ones(smooth_distance)/smooth_distance,'same')
-        template_ints[i,:] =  template_int
-        
+      
     #*** Next (hopefully with two templates only!) we continue and apply the TODCOR algorithm.    
     
     

@@ -273,14 +273,21 @@ def interpolate_spectra_onto_log_grid(spect,wave,sig, template_fns,bad_intervals
             spect_template,dummy = weighted_extract_spectrum(flux)
             dell_template = np.mean(wave_template[1:]-wave_template[:-1])
         else:
-            #Next try a template text file (wavelength and flux in 2 columns)
+            #Try loading pickled RV standards
             try:
-                dd = np.loadtxt(template_fn)
-                dell_template = np.mean(dd[1:,0]-dd[:-1,0])
-                wave_template = dd[:,0]
-                spect_template = dd[:,1]
+                print('Using pickled Standards')
+                template_file = open(template_fn, 'r')
+                wave_template, spect_template = pickle.load(template_file)
+                dell_template = np.mean(wave_template[1:]-wave_template[:-1])
+            #Next try a template text file (wavelength and flux in 2 columns)
+            #try:
+            #    dd = np.loadtxt(template_fn)
+            #    dell_template = np.mean(dd[1:,0]-dd[:-1,0])
+            #    wave_template = dd[:,0]
+            #    spect_template = dd[:,1]
             #Finally try the Ambre convolved spectral format.
             except:
+                print('Using ambre models')
                 spect_template = pyfits.getdata(template_fn)
                 dell_template = 0.1
                 wave_template=np.arange(90000)*dell_template + 3000
@@ -289,7 +296,6 @@ def interpolate_spectra_onto_log_grid(spect,wave,sig, template_fns,bad_intervals
         template_subsamp = int((wave[1]-wave[0])/dell_template)
         #Make sure it is an odd number to prevent shifting...
         template_subsamp = np.maximum((template_subsamp//2)*2 - 1,1)
-        
         spect_template = np.convolve(np.convolve(spect_template,np.ones(template_subsamp)/template_subsamp,'same'),\
                                   np.ones(2*template_subsamp+1)/(2*template_subsamp+1),'same')
         #Interpolate onto the log wavelength grid.

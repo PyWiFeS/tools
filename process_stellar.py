@@ -13,7 +13,8 @@ flux,sig,wave = read_and_find_star_p11(fn)
 
 fn = 'T2m3wr-20140617.144009-0167.p08.fits'
 
-*** 4 lines below to run todcor ***
+*** 5 lines below to run todcor ***
+%run process_stellar
 fn = '/Users/mireland/data/wifes/141110/blue/T2m3wb-20141110.093650-0803.p08.fits'
 flux,wave = read_and_find_star_p08(fn)
 spectrum,sig = weighted_extract_spectrum(flux)
@@ -506,7 +507,7 @@ def calc_rv_template(spect,wave,sig, template_fns,bad_intervals,smooth_distance=
         
 def calc_rv_todcor(spect,wave,sig, template_fns,bad_intervals=[],fig_fn='',\
     smooth_distance=201,convolve_template=True, alpha=0.3,\
-    nwave_log=int(1e4),ncor=1000):
+    nwave_log=int(1e4),ncor=1000, return_fitted=False):
     """Compute a radial velocity based on an best fitting template spectrum.
     Teff is estimated at the same time.
     
@@ -634,7 +635,10 @@ def calc_rv_todcor(spect,wave,sig, template_fns,bad_intervals=[],fig_fn='',\
     #1) Error (below) not computed.
     #errors = np.sqrt(np.diag(fit_p.fit_info['cov_x']))
 
-    return rv_x, errors[0], rv_y, errors[1], np.max(todcor)
+    if return_fitted:
+        return wave_log, spect_int, model_spect
+    else:
+        return rv_x, errors[0], rv_y, errors[1], np.max(todcor)
     
 def rv_process_dir(ddir,template_conv_dir='./ambre_conv/',standards_dir='',outfn='rvs.txt',texfn='rvs.tex',outdir='',mask_ha_emission=False):
     """Process all files in a directory for radial velocities.

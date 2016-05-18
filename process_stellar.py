@@ -17,8 +17,9 @@ fn = 'T2m3wr-20140617.144009-0167.p08.fits'
 fn = '/Users/mireland/data/wifes/141110/blue/T2m3wb-20141110.093650-0803.p08.fits'
 flux,wave = read_and_find_star_p08(fn)
 spectrum,sig = weighted_extract_spectrum(flux)
-calc_rv_todcor(spectrum,wave,sig,['RV_templates/9000g40p00k2v150.txt','RV_templates/6000g35p00k2v150.txt'])
+calc_rv_todcor(spectrum,wave,sig,['RV_templates/9000g40p00k2v150.txt','RV_templates/6000g35p00k2v150.txt'],alpha=0.3)
 
+*** lines below test todcor ***
 binspect,binwave,binsig=make_fake_binary(spectrum,wave,sig,    ['RV_templates/9000g40p00k2v150.txt','RV_templates/5250g35p00k2v150.txt'],0.5,-200,+200)
 calc_rv_todcor(binspect,binwave,binsig,['RV_templates/9000g40p00k2v150.txt','RV_templates/5250g35p00k2v150.txt'],alpha=0.5)
 
@@ -237,6 +238,14 @@ def rv_fit_mlnlike(shift,modft,data,errors,gaussian_offset):
     shifted_mod = np.fft.irfft(modft * np.exp(-2j * np.pi * np.arange(len(modft))/len(data) * shift))
     return -np.sum(np.log(np.exp(-(data - shifted_mod)**2/2.0/errors**2) + gaussian_offset))
 
+def rv_shift_binary(shift1, shift2, alpha, modft1, modft2):
+    """Shift two templates and add them, to model a binary star"""
+    data_len = (len(modft1)-1)*2
+    shifted_mod1 = np.fft.irfft(modft1 * np.exp(-2j * np.pi * np.arange(len(modft1))/data_len * shift1))
+    shifted_mod2 = np.fft.irfft(modft2 * np.exp(-2j * np.pi * np.arange(len(modft2))/data_len * shift2))
+    return (shifted_mod1 + alpha*shifted_mod2)/(1.0 + alpha)
+
+    
 def make_fake_binary(spect,wave,sig, template_fns, flux_ratio, rv0, rv1):
     """Make a fake binary in order to test todcor etc!"""
 #    (wave_log, spect_int, sig_int, template_ints) =  \
@@ -522,10 +531,16 @@ def calc_rv_todcor(spect,wave,sig, template_fns,bad_intervals=[],fig_fn='',\
         
     Returns
     -------
-    rv: float
-        Radial velocities in km/s
-    rv_sig: float
+    rv1: float
+        Radial velocity of star 1 in km/s
+    rv_sig1: float
         Uncertainty in radial velocity (NB assumes good model fit)
+    rv2: float
+        Radial velocity of star 1 in km/s
+    rv_sig2: float
+        Uncertainty in radial velocity (NB assumes good model fit)
+    corpeak: float
+        Correlation peak
     """  
     (wave_log, spect_int, sig_int, template_ints) =  \
         interpolate_spectra_onto_log_grid(spect,wave,sig, template_fns,\
@@ -600,11 +615,26 @@ def calc_rv_todcor(spect,wave,sig, template_fns,bad_intervals=[],fig_fn='',\
     rv_x = drv*((p.parameters[1] + xym[1]) - ncor//2)
     rv_y = drv*((p.parameters[2] + xym[0]) - ncor//2)
 
+    model_spect = rv_shift_binary(rv_x/drv, rv_y/drv, alpha, np.fft.rfft(template_ints[0]), np.fft.rfft(template_ints[1]))
+    
+    #Compute theoretical RV uncertainties from the "Q" factors...
+    errors = []
+    for i,template_int in enumerate(template_ints):
+        if (i==0):
+            ti = template_int/(1 + alpha)
+        else:
+            ti = template_int*alpha/(1 + alpha)
+        model_spect_deriv = (ti[1:]-ti[:-1])/(wave_log[1:]-wave_log[:-1])
+        wave2_on_s = (0.5*(wave_log[1:]+wave_log[:-1]))**2/(0.5*(ti[1:]+ti[:-1]+2))
+        q_factor = np.sqrt(np.mean(wave2_on_s*model_spect_deriv**2))
+        photon_rv_error = 3e5/q_factor*np.median(sig_int)/np.sqrt(len(spect))
+        errors.append(photon_rv_error)
+
     #ISSUES: 
     #1) Error (below) not computed.
-    errors = np.sqrt(np.diag(fit_p.fit_info['cov_x']))
+    #errors = np.sqrt(np.diag(fit_p.fit_info['cov_x']))
 
-    return rv_x, rv_y
+    return rv_x, errors[0], rv_y, errors[1], np.max(todcor)
     
 def rv_process_dir(ddir,template_conv_dir='./ambre_conv/',standards_dir='',outfn='rvs.txt',texfn='rvs.tex',outdir='',mask_ha_emission=False):
     """Process all files in a directory for radial velocities.

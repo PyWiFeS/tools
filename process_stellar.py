@@ -18,7 +18,9 @@ fn = '/Users/mireland/data/wifes/141110/blue/T2m3wb-20141110.093650-0803.p08.fit
 flux,wave = read_and_find_star_p08(fn)
 spectrum,sig = weighted_extract_spectrum(flux)
 calc_rv_todcor(spectrum,wave,sig,['RV_templates/9000g40p00k2v150.txt','RV_templates/6000g35p00k2v150.txt'])
-calc_rv_todcor(binspect,binwave,binsig,['RV_templates/9000g40p00k2v150.txt','RV_templates/6000g35p00k2v150.txt'])
+
+binspect,binwave,binsig=make_fake_binary(spectrum,wave,sig,    ['RV_templates/9000g40p00k2v150.txt','RV_templates/5250g35p00k2v150.txt'],0.5,-200,+200)
+calc_rv_todcor(binspect,binwave,binsig,['RV_templates/9000g40p00k2v150.txt','RV_templates/5250g35p00k2v150.txt'],alpha=0.5)
 
 rv,rv_sig = calc_rv_template(spectrum,wave,sig,'template_conv', ([0,5400],[6870,6890]))
 rv,rv_sig = calc_rv_template(spectrum,wave,sig,template_fns, ([0,5400],[6870,6890]))
@@ -237,15 +239,28 @@ def rv_fit_mlnlike(shift,modft,data,errors,gaussian_offset):
 
 def make_fake_binary(spect,wave,sig, template_fns, flux_ratio, rv0, rv1):
     """Make a fake binary in order to test todcor etc!"""
-    (wave_log, spect_int, sig_int, template_ints) =  \
-        interpolate_spectra_onto_log_grid(spect,wave,sig, template_fns)
+#    (wave_log, spect_int, sig_int, template_ints) =  \
+#        interpolate_spectra_onto_log_grid(spect,wave,sig, template_fns)
+    
+    wave_templates = []
+    spect_templates = []
+    for template_fn in template_fns:
+        dd = np.loadtxt(template_fn)
+        wave_templates.append(dd[:,0])
+        spect_templates.append(dd[:,1])
+    wave_templates = np.array(wave_templates)
+    spect_templates = np.array(spect_templates)
     
     c_light = 3e5
-    fake_binary = np.interp(wave_log*(1 - rv0/c_light),wave_log, template_ints[0]) + \
-                  np.interp(wave_log*(1 - rv1/c_light),wave_log, template_ints[1])*flux_ratio
+    fake_binary = np.interp(wave_templates[0]*(1 - rv0/c_light),wave_templates[0], spect_templates[0]) + \
+                  np.interp(wave_templates[0]*(1 - rv1/c_light),wave_templates[1], spect_templates[1])*flux_ratio
+    
+    #fake_binary = np.interp(wave_log*(1 - rv0/c_light),wave_log, template_ints[0]) + \
+    #              np.interp(wave_log*(1 - rv1/c_light),wave_log, template_ints[1])*flux_ratio
     #Un-continuum-subtract
-    binspect = fake_binary + 1
-    return binspect, wave_log, np.ones(len(binspect))*0.01
+    #binspect = fake_binary + 1
+    #return binspect, wave_log, np.ones(len(binspect))*0.01
+    return fake_binary, wave_templates[0], np.ones(len(wave_templates[0]))*0.01
 
 def interpolate_spectra_onto_log_grid(spect,wave,sig, template_fns,bad_intervals=[],\
         smooth_distance=201,convolve_template=True, nwave_log=int(1e4)):
@@ -521,53 +536,73 @@ def calc_rv_todcor(spect,wave,sig, template_fns,bad_intervals=[],fig_fn='',\
     peaks = np.zeros(len(template_fns))
     drv = np.log(wave_log[1]/wave_log[0])*2.998e5
       
-    #*** Next (hopefully with two templates only!) we continue and apply the TODCOR algorithm.    
-    c1  = np.fft.irfft(np.fft.rfft(template_ints[0])*np.conj(np.fft.rfft(spect_int)))
+    #*** Next (hopefully with two templates only!) we continue and apply the TODCOR algorithm.
+    
+    window_width = nwave_log//20
+    ramp = np.arange(1,window_width+1,dtype=float)/window_width
+    window = np.ones(nwave_log)
+    window[:window_width] *= ramp
+    window[-window_width:] *= ramp[::-1]
+    
+    template_ints[0] *= window
+    template_ints[1] *= window
+    spect_int *= window
+    
+    norm1 = np.sqrt(np.sum(template_ints[0]**2))  
+    norm2 = np.sqrt(np.sum(template_ints[1]**2))    
+    norm_tgt = np.sqrt(np.sum(spect_int**2))
+    
+    #pdb.set_trace()
+    c1  = np.fft.irfft(np.conj(np.fft.rfft(template_ints[0]/norm1))*np.fft.rfft(spect_int/norm_tgt))
     c1 = np.roll(c1,ncor//2)[:ncor]
-    c2  = np.fft.irfft(np.fft.rfft(template_ints[1])*np.conj(np.fft.rfft(spect_int)))
+    c2  = np.fft.irfft(np.conj(np.fft.rfft(template_ints[1]/norm2))*np.fft.rfft(spect_int/norm_tgt))
     c2 = np.roll(c2,ncor//2)[:ncor]
-    #!!! Unclear which way around this line should be.
-    c12 = np.fft.irfft(np.fft.rfft(template_ints[1])*np.conj(np.fft.rfft(template_ints[0])))
+    
+    #Unclear which way around this line should be. ix_c12 sign was corrected in order to 
+    #give the right result with simulated data.
+    c12 = np.fft.irfft(np.fft.rfft(template_ints[1]/norm2)*np.conj(np.fft.rfft(template_ints[0]/norm1)))
     c12 = np.roll(c12,ncor//2)[:ncor]
     ix = np.arange(ncor).astype(int)
     xy = np.meshgrid(ix,ix)
-    todcor = (c1[xy[0]] + c2[xy[1]])/np.sqrt(1 + 2*alpha*c12[xy[1]-xy[0]]/3 + alpha**2)
+
+    #Correct the flux ratio for the RMS spectral variation. Is this needed???
+    alpha_norm = alpha * norm2/norm1
+    ix_c12 = np.minimum(np.maximum(xy[0]-xy[1]+ncor//2,0),ncor-1)
+    todcor = (c1[xy[0]] + alpha_norm*c2[xy[1]])/np.sqrt(1 + 2*alpha_norm*c12[ix_c12] + alpha_norm**2)
     
-    
+    print("Max correlation: {0:5.2f}".format(np.max(todcor)))
+    #print(alpha_norm)
     #plt.plot(drv*(np.arange(nwave_log)-nwave_log//2),np.roll(c1,nwave_log//2))
     #Figure like TODCOR paper:
     #fig = plt.figure()
     #ax = fig.gca(projection='3d') 
     #ax.plot_surface(xy[0],xy[1],todcor)
     
+    plt.clf()
     plt.imshow(todcor, cmap=cm.gray,interpolation='nearest',extent=[-drv*ncor/2,drv*ncor/2,-drv*ncor/2,drv*ncor/2])
 
     xym = np.unravel_index(np.argmax(todcor), todcor.shape)
-    hw_fit = 3
+    hw_fit = 2
+    
+    if (xym[0]< hw_fit) | (xym[1]< hw_fit) | (xym[0]>= ncor-hw_fit) | (xym[1]>= ncor-hw_fit):
+        print("Error: TODCOR peak to close to edge!")
+        raise UserWarning
+    
     ix_fit = np.arange(-hw_fit, hw_fit + 1).astype(int)
     xy_fit = np.meshgrid(ix_fit,ix_fit)
     p_init = models.Gaussian2D(amplitude=np.max(todcor),x_mean=0, y_mean=0, 
         x_stddev = 50.0/drv, y_stddev = 50.0/drv)
     fit_p = fitting.LevMarLSQFitter()
     
-#    import warnings
-#    with warnings.catch_warnings():
-#        # Ignore model linearity warning from the fitter
-#        warnings.simplefilter('ignore')
     p = fit_p(p_init, xy_fit[0], xy_fit[1], todcor[xym[0]-hw_fit:xym[0]+hw_fit+1, 
                                                    xym[1]-hw_fit:xym[1]+hw_fit+1])
-    
+
     rv_x = drv*((p.parameters[1] + xym[1]) - ncor//2)
     rv_y = drv*((p.parameters[2] + xym[0]) - ncor//2)
 
-#    pdb.set_trace()
-
-#    pdb.set_trace()
-    #errors = np.sqrt(np.diag(fit_p.fit_info['cov_x']))
-
     #ISSUES: 
-    #1) sign of cross-correlation uncertain above.
-    #2) Normalization of cross-correlation uncertain above.
+    #1) Error (below) not computed.
+    errors = np.sqrt(np.diag(fit_p.fit_info['cov_x']))
 
     return rv_x, rv_y
     

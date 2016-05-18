@@ -12,12 +12,15 @@ fn = 'T2m3wr-20140617.144009-0167.p11.fits'
 flux,sig,wave = read_and_find_star_p11(fn)
 
 fn = 'T2m3wr-20140617.144009-0167.p08.fits'
+
+*** 4 lines below to run todcor ***
 fn = '/Users/mireland/data/wifes/141110/blue/T2m3wb-20141110.093650-0803.p08.fits'
 flux,wave = read_and_find_star_p08(fn)
 spectrum,sig = weighted_extract_spectrum(flux)
-rv,rv_sig = calc_rv_template(spectrum,wave,sig,'template_conv', ([0,5400],[6870,6890]))
+calc_rv_todcor(spectrum,wave,sig,['RV_templates/9000g40p00k2v150.txt','RV_templates/6000g35p00k2v150.txt'])
+calc_rv_todcor(binspect,binwave,binsig,['RV_templates/9000g40p00k2v150.txt','RV_templates/6000g35p00k2v150.txt'])
 
-calc_rv_todcor(spectrum,wave,sig,['RV_templates/9000g40p00k2v150.txt','RV_templates/5250g35p00k2v150.txt'])
+rv,rv_sig = calc_rv_template(spectrum,wave,sig,'template_conv', ([0,5400],[6870,6890]))
 rv,rv_sig = calc_rv_template(spectrum,wave,sig,template_fns, ([0,5400],[6870,6890]))
 """
 
@@ -28,12 +31,14 @@ except:
     import astropy.io.fits as pyfits
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.cm as cm
 import scipy.optimize as op
 import pdb
 import glob
 import pickle
 from readcol import readcol
 from mpl_toolkits.mplot3d import Axes3D
+from astropy.modeling import models, fitting
 
 def read_and_find_star_p11(fn, manual_click=False, npix=7, subtract_sky=True,sky_rad=2):
     """Read in a cube and find the star.
@@ -230,6 +235,18 @@ def rv_fit_mlnlike(shift,modft,data,errors,gaussian_offset):
     shifted_mod = np.fft.irfft(modft * np.exp(-2j * np.pi * np.arange(len(modft))/len(data) * shift))
     return -np.sum(np.log(np.exp(-(data - shifted_mod)**2/2.0/errors**2) + gaussian_offset))
 
+def make_fake_binary(spect,wave,sig, template_fns, flux_ratio, rv0, rv1):
+    """Make a fake binary in order to test todcor etc!"""
+    (wave_log, spect_int, sig_int, template_ints) =  \
+        interpolate_spectra_onto_log_grid(spect,wave,sig, template_fns)
+    
+    c_light = 3e5
+    fake_binary = np.interp(wave_log*(1 - rv0/c_light),wave_log, template_ints[0]) + \
+                  np.interp(wave_log*(1 - rv1/c_light),wave_log, template_ints[1])*flux_ratio
+    #Un-continuum-subtract
+    binspect = fake_binary + 1
+    return binspect, wave_log, np.ones(len(binspect))*0.01
+
 def interpolate_spectra_onto_log_grid(spect,wave,sig, template_fns,bad_intervals=[],\
         smooth_distance=201,convolve_template=True, nwave_log=int(1e4)):
     """Interpolate both the target and template spectra onto a common wavelength grid"""
@@ -267,30 +284,38 @@ def interpolate_spectra_onto_log_grid(spect,wave,sig, template_fns,bad_intervals
     #Now we find the interpolated template spectra, template_ints
     template_ints = np.zeros( (len(template_fns),len(wave_log)) )
     for i,template_fn in enumerate(template_fns):
-        #Try loading a reduced WiFeS file first... 
-        if template_fn.find("p08")>0:
-            flux,wave_template=read_and_find_star_p08(template_fn)
-            spect_template,dummy = weighted_extract_spectrum(flux)
-            dell_template = np.mean(wave_template[1:]-wave_template[:-1])
-        else:
+        try:
+            #Try loading a reduced WiFeS file first... 
+            if template_fn.find("p08") >=  len(template_fn) - 8:
+                print('Using raw wifes p08 file')
+                flux,wave_template=read_and_find_star_p08(template_fn)
+                spect_template,dummy = weighted_extract_spectrum(flux)
+                dell_template = np.mean(wave_template[1:]-wave_template[:-1])
             #Try loading pickled RV standards
-            try:
+            elif template_fn.find('pkl') >= len(template_fn)-4:
                 print('Using pickled Standards')
                 template_file = open(template_fn, 'r')
                 wave_template, spect_template = pickle.load(template_file)
                 dell_template = np.mean(wave_template[1:]-wave_template[:-1])
             #Next try a template text file (wavelength and flux in 2 columns)
-            #try:
-            #    dd = np.loadtxt(template_fn)
-            #    dell_template = np.mean(dd[1:,0]-dd[:-1,0])
-            #    wave_template = dd[:,0]
-            #    spect_template = dd[:,1]
+            elif template_fn.find('txt') >= len(template_fn)-4:
+                print('Using text file input')
+                dd = np.loadtxt(template_fn)
+                dell_template = np.mean(dd[1:,0]-dd[:-1,0])
+                wave_template = dd[:,0]
+                spect_template = dd[:,1]
             #Finally try the Ambre convolved spectral format.
-            except:
-                print('Using ambre models')
+            elif template_fn.find('fit') >= len(template_fn)-4:
+                print('Using ambre models (fits with fixed wavelength grid)')
                 spect_template = pyfits.getdata(template_fn)
                 dell_template = 0.1
                 wave_template=np.arange(90000)*dell_template + 3000
+            else:
+                print('Invalid rv standard or model file: ' + template_fn)
+                raise UserWarning
+        except:
+            print('Error loading model spectrum')
+            raise UserWarning
             
         #Amount of subsampling in the template
         template_subsamp = int((wave[1]-wave[0])/dell_template)
@@ -497,10 +522,6 @@ def calc_rv_todcor(spect,wave,sig, template_fns,bad_intervals=[],fig_fn='',\
     drv = np.log(wave_log[1]/wave_log[0])*2.998e5
       
     #*** Next (hopefully with two templates only!) we continue and apply the TODCOR algorithm.    
-    
-    
-    pdb.set_trace()
-
     c1  = np.fft.irfft(np.fft.rfft(template_ints[0])*np.conj(np.fft.rfft(spect_int)))
     c1 = np.roll(c1,ncor//2)[:ncor]
     c2  = np.fft.irfft(np.fft.rfft(template_ints[1])*np.conj(np.fft.rfft(spect_int)))
@@ -521,13 +542,34 @@ def calc_rv_todcor(spect,wave,sig, template_fns,bad_intervals=[],fig_fn='',\
     
     plt.imshow(todcor, cmap=cm.gray,interpolation='nearest',extent=[-drv*ncor/2,drv*ncor/2,-drv*ncor/2,drv*ncor/2])
 
-    pdb.set_trace()
+    xym = np.unravel_index(np.argmax(todcor), todcor.shape)
+    hw_fit = 3
+    ix_fit = np.arange(-hw_fit, hw_fit + 1).astype(int)
+    xy_fit = np.meshgrid(ix_fit,ix_fit)
+    p_init = models.Gaussian2D(amplitude=np.max(todcor),x_mean=0, y_mean=0, 
+        x_stddev = 50.0/drv, y_stddev = 50.0/drv)
+    fit_p = fitting.LevMarLSQFitter()
+    
+#    import warnings
+#    with warnings.catch_warnings():
+#        # Ignore model linearity warning from the fitter
+#        warnings.simplefilter('ignore')
+    p = fit_p(p_init, xy_fit[0], xy_fit[1], todcor[xym[0]-hw_fit:xym[0]+hw_fit+1, 
+                                                   xym[1]-hw_fit:xym[1]+hw_fit+1])
+    
+    rv_x = drv*((p.parameters[1] + xym[1]) - ncor//2)
+    rv_y = drv*((p.parameters[2] + xym[0]) - ncor//2)
+
+#    pdb.set_trace()
+
+#    pdb.set_trace()
+    #errors = np.sqrt(np.diag(fit_p.fit_info['cov_x']))
 
     #ISSUES: 
     #1) sign of cross-correlation uncertain above.
     #2) Normalization of cross-correlation uncertain above.
 
-    return rv,rv_sig,name
+    return rv_x, rv_y
     
 def rv_process_dir(ddir,template_conv_dir='./ambre_conv/',standards_dir='',outfn='rvs.txt',texfn='rvs.tex',outdir='',mask_ha_emission=False):
     """Process all files in a directory for radial velocities.

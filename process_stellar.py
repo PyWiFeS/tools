@@ -18,7 +18,13 @@ fn = 'T2m3wr-20140617.144009-0167.p08.fits'
 fn = '/Users/mireland/data/wifes/141110/blue/T2m3wb-20141110.093650-0803.p08.fits'
 flux,wave = read_and_find_star_p08(fn)
 spectrum,sig = weighted_extract_spectrum(flux)
-calc_rv_todcor(spectrum,wave,sig,['RV_templates/9000g40p00k2v150.txt','RV_templates/6000g35p00k2v150.txt'],alpha=0.3)
+wave_log, spect_int, model_spect = calc_rv_todcor(spectrum,wave,sig,['RV_templates/9000g40p00k2v150.txt','RV_templates/6000g35p00k2v150.txt'],alpha=0.3,out_fn='rvs.txt',jd=123456.0,return_fitted=True)
+
+plt.clf()
+plt.plot(wave_log, spect_int, label='Data')
+plt.plot(wave_log, model_spect, label='Model')
+plt.legend()
+plt.xlabel('Wavelength')
 
 *** lines below test todcor ***
 binspect,binwave,binsig=make_fake_binary(spectrum,wave,sig,    ['RV_templates/9000g40p00k2v150.txt','RV_templates/5250g35p00k2v150.txt'],0.5,-200,+200)
@@ -507,7 +513,7 @@ def calc_rv_template(spect,wave,sig, template_fns,bad_intervals,smooth_distance=
         
 def calc_rv_todcor(spect,wave,sig, template_fns,bad_intervals=[],fig_fn='',\
     smooth_distance=201,convolve_template=True, alpha=0.3,\
-    nwave_log=int(1e4),ncor=1000, return_fitted=False):
+    nwave_log=int(1e4),ncor=1000, return_fitted=False,jd=0.0,out_fn=''):
     """Compute a radial velocity based on an best fitting template spectrum.
     Teff is estimated at the same time.
     
@@ -634,6 +640,12 @@ def calc_rv_todcor(spect,wave,sig, template_fns,bad_intervals=[],fig_fn='',\
     #ISSUES: 
     #1) Error (below) not computed.
     #errors = np.sqrt(np.diag(fit_p.fit_info['cov_x']))
+
+    if len(out_fn)>0:
+        outfile = open(out_fn, 'a')
+        outfile.write('{0:12.4f}, {1:8.2f}, {2:8.2f}, {3:8.2f}, {4:8.2f}, {5:8.3f}\n'.
+            format(jd, rv_x, errors[0], rv_y, errors[1], np.max(todcor)))
+        outfile.close()
 
     if return_fitted:
         return wave_log, spect_int, model_spect

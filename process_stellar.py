@@ -5,8 +5,8 @@ WARNING - this code is extremely rough in its initial commit
 
 example lines of code...
 
-Executing from the code directory:
-rv_process_dir('PROCESSED_DATA_DIRECTORY')
+Executing from the code directory, e.g. with Margaret's output directory:
+rv_process_dir('PROCESSED_DATA_DIRECTORY', outdir =/priv/mulga1/mstream/wifes/wifes/tools')
 
 fn = 'T2m3wr-20140617.144009-0167.p11.fits'
 flux,sig,wave = read_and_find_star_p11(fn)
@@ -15,23 +15,42 @@ fn = 'T2m3wr-20140617.144009-0167.p08.fits'
 
 *** 5 lines below to run todcor ***
 %run process_stellar
-fn = '/Users/mireland/data/wifes/141110/blue/T2m3wb-20141110.093650-0803.p08.fits'
-flux,wave = read_and_find_star_p08(fn)
-spectrum,sig = weighted_extract_spectrum(flux)
-wave_log, spect_int, model_spect = calc_rv_todcor(spectrum,wave,sig,['RV_templates/9000g40p00k2v150.txt','RV_templates/6000g35p00k2v150.txt'],alpha=0.3,out_fn='rvs.txt',jd=123456.0,return_fitted=True)
+#fn = 'C:/Users/Margaret/MPhil/rvs_p08files/T2m3wb-20141110.103724-0816.p08.fits'
+#flux,wave = read_and_find_star_p08(fn)
 
-plt.clf()
-plt.plot(wave_log, spect_int, label='Data')
-plt.plot(wave_log, model_spect, label='Model')
-plt.legend()
-plt.xlabel('Wavelength')
+
+files = glob.glob('C:/Users/Margaret/MPhil/rvs_p08files_TTHor_2016/*.fits')
+base_path = 'C:/Users/Margaret/MPhil/rvs_p08files_TTHor_2016/'
+for file in files:  
+    file_num = int(file.split('.')[1].split('-')[1])
+    flux,wave = read_and_find_star_p08(file)
+    spectrum,sig = weighted_extract_spectrum(flux)
+    helcor = pyfits.getheader(file)['RADVEL']
+    wave_log, spect_int, model_spect = calc_rv_todcor(spectrum,wave,sig,['C:/Users/Margaret/MPhil/RV_templates/8500g40p00k2v50.txt','C:/Users/Margaret/MPhil/RV_templates/5000g35p00k2v50.txt'],alpha=0.1,out_fn='rvs.txt',jd=file_num,return_fitted=True,heliocentric_correction=helcor)
+
+    plt.clf()
+    plt.plot(wave_log, spect_int, label='Data')
+    plt.plot(wave_log, model_spect, label='Model')
+    plt.legend()
+    plt.xlabel('Wavelength')
 
 *** lines below test todcor ***
-binspect,binwave,binsig=make_fake_binary(spectrum,wave,sig,    ['RV_templates/9000g40p00k2v150.txt','RV_templates/5250g35p00k2v150.txt'],0.5,-200,+200)
+binspect,binwave,binsig=make_fake_binary(spectrum, wave, sig, ['RV_templates/9000g40p00k2v150.txt','RV_templates/5250g35p00k2v150.txt'],0.5,-200,+200)
 calc_rv_todcor(binspect,binwave,binsig,['RV_templates/9000g40p00k2v150.txt','RV_templates/5250g35p00k2v150.txt'],alpha=0.5)
 
 rv,rv_sig = calc_rv_template(spectrum,wave,sig,'template_conv', ([0,5400],[6870,6890]))
 rv,rv_sig = calc_rv_template(spectrum,wave,sig,template_fns, ([0,5400],[6870,6890]))
+
+** To test the flux normalization of todcor **
+margaret_dir = '/Users/mireland/Dropbox/Margaret Masters/RV_templates_flux'
+margaret_dir = '/Users/mireland/python/pywifes/tools/margaret/'
+template_fns = glob.glob(margaret_dir+'*txt')
+
+flux, wave = read_and_find_star_p08(margaret_dir + 'T2m3wb-20141110.113949-0831.p08.fits')
+#flux, wave = read_and_find_star_p08(margaret_dir + 'T2m3wb-20141108.120006-0389.p08.fits')
+spectrum, sig = weighted_extract_spectrum(flux)
+dummy = calc_rv_todcor(spectrum, wave,sig, [template_fns[3], template_fns[1]], bad_intervals=[[0,3810], [5005, 5022]], alpha=0.25, plotit=True)
+
 """
 
 from __future__ import print_function
@@ -279,7 +298,7 @@ def make_fake_binary(spect,wave,sig, template_fns, flux_ratio, rv0, rv1):
     return fake_binary, wave_templates[0], np.ones(len(wave_templates[0]))*0.01
 
 def interpolate_spectra_onto_log_grid(spect,wave,sig, template_fns,bad_intervals=[],\
-        smooth_distance=201,convolve_template=True, nwave_log=int(1e4)):
+        smooth_distance=201,convolve_template=True, nwave_log=int(1e4), subtract_smoothed=True):
     """Interpolate both the target and template spectra onto a common wavelength grid"""
     
     #Create our logarithmic wavelength scale with the same min and max wavelengths as the
@@ -308,9 +327,10 @@ def interpolate_spectra_onto_log_grid(spect,wave,sig, template_fns,bad_intervals
         spect_int[wlo:whi] = spect_int[wlo] + np.arange(whi-wlo,dtype='float')/(whi-wlo)*(spect_int[whi] - spect_int[wlo])
         sig_int[wlo:whi]=1
     
-    #Subtract smoothed spectrum
-    spect_int -= spect_int[0] + np.arange(len(spect_int))/(len(spect_int)-1.0)*(spect_int[-1]-spect_int[0])
-    spect_int -= np.convolve(spect_int,np.ones(smooth_distance)/smooth_distance,'same')
+    if subtract_smoothed:
+        #Subtract smoothed spectrum
+        spect_int -= spect_int[0] + np.arange(len(spect_int))/(len(spect_int)-1.0)*(spect_int[-1]-spect_int[0])
+        spect_int -= np.convolve(spect_int,np.ones(smooth_distance)/smooth_distance,'same')
     
     #Now we find the interpolated template spectra, template_ints
     template_ints = np.zeros( (len(template_fns),len(wave_log)) )
@@ -354,6 +374,7 @@ def interpolate_spectra_onto_log_grid(spect,wave,sig, template_fns,bad_intervals
         template_subsamp = np.maximum((template_subsamp//2)*2 - 1,1)
         spect_template = np.convolve(np.convolve(spect_template,np.ones(template_subsamp)/template_subsamp,'same'),\
                                   np.ones(2*template_subsamp+1)/(2*template_subsamp+1),'same')
+
         #Interpolate onto the log wavelength grid.
         template_int = np.interp(wave_log,wave_template,spect_template)
         #Normalise 
@@ -369,15 +390,17 @@ def interpolate_spectra_onto_log_grid(spect,wave,sig, template_fns,bad_intervals
             whi = whi[0]
             wlo = wlo[0]
             template_int[wlo:whi] = template_int[wlo] + np.arange(whi-wlo, dtype='float')/(whi-wlo)*(template_int[whi] - template_int[wlo])
-        #Subtract smoothed spectrum
-        template_int -= template_int[0] + np.arange(len(template_int))/(len(template_int)-1.0)*(template_int[-1]-template_int[0])
-        template_int -= np.convolve(template_int,np.ones(smooth_distance)/smooth_distance,'same')
+        if subtract_smoothed:
+            #Subtract smoothed spectrum
+            template_int -= template_int[0] + np.arange(len(template_int))/(len(template_int)-1.0)*(template_int[-1]-template_int[0])
+            template_int -= np.convolve(template_int,np.ones(smooth_distance)/smooth_distance,'same')
         template_ints[i,:] =  template_int
         
     return wave_log, spect_int, sig_int, template_ints
     
 def calc_rv_template(spect,wave,sig, template_fns,bad_intervals,smooth_distance=101, \
-    gaussian_offset=1e-4,nwave_log=1e4,oversamp=1,fig_fn='',convolve_template=True,starnumber=0):
+    gaussian_offset=1e-4,nwave_log=1e4,oversamp=1,fig_fn='',convolve_template=True,\
+    starnumber=0, plotit=False):
     """Compute a radial velocity based on an best fitting template spectrum.
     Teff is estimated at the same time.
     
@@ -513,7 +536,8 @@ def calc_rv_template(spect,wave,sig, template_fns,bad_intervals,smooth_distance=
         
 def calc_rv_todcor(spect,wave,sig, template_fns,bad_intervals=[],fig_fn='',\
     smooth_distance=201,convolve_template=True, alpha=0.3,\
-    nwave_log=int(1e4),ncor=1000, return_fitted=False,jd=0.0,out_fn=''):
+    nwave_log=int(1e4),ncor=1000, return_fitted=False,jd=0.0,out_fn='',\
+    heliocentric_correction=0, plotit=False):
     """Compute a radial velocity based on an best fitting template spectrum.
     Teff is estimated at the same time.
     
@@ -624,6 +648,34 @@ def calc_rv_todcor(spect,wave,sig, template_fns,bad_intervals=[],fig_fn='',\
 
     model_spect = rv_shift_binary(rv_x/drv, rv_y/drv, alpha, np.fft.rfft(template_ints[0]), np.fft.rfft(template_ints[1]))
     
+    if plotit:
+        (wave_log, spect_int_norm, sig_int, template_int_norm) =  \
+        interpolate_spectra_onto_log_grid(spect,wave,sig, template_fns,\
+            bad_intervals=bad_intervals, smooth_distance=smooth_distance, \
+            convolve_template=convolve_template, nwave_log=nwave_log, \
+            subtract_smoothed=False)
+        model_spect_norm = rv_shift_binary(rv_x/drv, rv_y/drv, alpha, \
+            np.fft.rfft(template_int_norm[0]), np.fft.rfft(template_int_norm[1]))
+        model_spect_prim = rv_shift_binary(rv_x/drv, rv_y/drv, 0, \
+            np.fft.rfft(template_int_norm[0]), np.fft.rfft(template_int_norm[1]))
+        model_spect_sec = rv_shift_binary(rv_x/drv, rv_y/drv, 1e6, \
+            np.fft.rfft(template_int_norm[0]), np.fft.rfft(template_int_norm[1]))
+        ss = np.ones(5e2)/5e2
+        model_ss = np.convolve(model_spect_norm, ss, mode='same')
+        spect_ss = np.convolve(spect_int_norm, ss, mode='same')
+        plt.clf()
+        plt.plot(wave_log, model_spect_norm/model_ss, label='Joint Model')
+        plt.plot(wave_log, model_spect_prim/model_ss/(1+alpha), label='Primary')
+        plt.plot(wave_log, model_spect_sec/model_ss*alpha/(1+alpha), label='Secondary')
+        plt.plot(wave_log, spect_int_norm/spect_ss, label='Data')
+        plt.legend()
+        plt.axis([3810, 5610, 0, 1.45])
+        plt.xlabel(r'Wavelength ($\AA$)')
+        plt.ylabel('Flux (normalised)')
+        plt.draw()
+        
+        #pdb.set_trace() #XXX
+    
     #Compute theoretical RV uncertainties from the "Q" factors...
     errors = []
     for i,template_int in enumerate(template_ints):
@@ -644,7 +696,7 @@ def calc_rv_todcor(spect,wave,sig, template_fns,bad_intervals=[],fig_fn='',\
     if len(out_fn)>0:
         outfile = open(out_fn, 'a')
         outfile.write('{0:12.4f}, {1:8.2f}, {2:8.2f}, {3:8.2f}, {4:8.2f}, {5:8.3f}\n'.
-            format(jd, rv_x, errors[0], rv_y, errors[1], np.max(todcor)))
+            format(jd, rv_x + heliocentric_correction, errors[0], rv_y + heliocentric_correction, errors[1], np.max(todcor)))
         outfile.close()
 
     if return_fitted:

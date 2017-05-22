@@ -26,7 +26,11 @@ for file in files:
     flux,wave = read_and_find_star_p08(file)
     spectrum,sig = weighted_extract_spectrum(flux)
     helcor = pyfits.getheader(file)['RADVEL']
-    wave_log, spect_int, model_spect = calc_rv_todcor(spectrum,wave,sig,['C:/Users/Margaret/MPhil/RV_templates/8500g40p00k2v50.txt','C:/Users/Margaret/MPhil/RV_templates/5000g35p00k2v50.txt'],alpha=0.1,out_fn='rvs.txt',jd=file_num,return_fitted=True,heliocentric_correction=helcor)
+    wave_log, spect_int, model_spect = calc_rv_todcor(spectrum,wave,sig,\
+        ['C:/Users/Margaret/MPhil/RV_templates/8500g40p00k2v50.txt',\
+        'C:/Users/Margaret/MPhil/RV_templates/5000g35p00k2v50.txt'],\
+        alpha=0.1,out_fn='rvs.txt',jd=file_num,return_fitted=True,\
+        heliocentric_correction=helcor)
 
     plt.clf()
     plt.plot(wave_log, spect_int, label='Data')
@@ -45,11 +49,15 @@ rv,rv_sig = calc_rv_template(spectrum,wave,sig,template_fns, ([0,5400],[6870,689
 margaret_dir = '/Users/mireland/Dropbox/Margaret Masters/RV_templates_flux'
 margaret_dir = '/Users/mireland/python/pywifes/tools/margaret/'
 template_fns = glob.glob(margaret_dir+'*txt')
+margaret_dir = '/Users/mireland/data/wifes/rvs_p08files/'
 
-flux, wave = read_and_find_star_p08(margaret_dir + 'T2m3wb-20141110.113949-0831.p08.fits')
+#flux, wave = read_and_find_star_p08(margaret_dir + 'T2m3wb-20141110.113949-0831.p08.fits')
 #flux, wave = read_and_find_star_p08(margaret_dir + 'T2m3wb-20141108.120006-0389.p08.fits')
+flux, wave = read_and_find_star_p08(margaret_dir + 'T2m3wb-20141110.114748-0832.p08.fits')
 spectrum, sig = weighted_extract_spectrum(flux)
-dummy = calc_rv_todcor(spectrum, wave,sig, [template_fns[3], template_fns[1]], bad_intervals=[[0,3810], [5005, 5022]], alpha=0.25, plotit=True)
+dummy = calc_rv_todcor(spectrum, wave,sig, [template_fns[3], template_fns[1]], bad_intervals=[[0,3810], [5005, 5028]], alpha=0.25, plotit=True)
+dummy = calc_rv_todcor(spectrum, wave,sig, [template_fns[3], template_fns[1]], bad_intervals=[[0,4200], [5067,5075],[5500,6000]], alpha=0.25, plotit=True)
+dummy = calc_rv_todcor(spectrum, wave,sig, [template_fns[2], template_fns[1]], bad_intervals=[[0,4200], [5067,5075],[5500,6000]], alpha=0.25, plotit=True)
 
 """
 
@@ -613,7 +621,8 @@ def calc_rv_todcor(spect,wave,sig, template_fns,bad_intervals=[],fig_fn='',\
 
     #Correct the flux ratio for the RMS spectral variation. Is this needed???
     alpha_norm = alpha * norm2/norm1
-    ix_c12 = np.minimum(np.maximum(xy[0]-xy[1]+ncor//2,0),ncor-1)
+    ix_c12 = np.minimum(np.maximum(xy[0]-xy[1]+ncor//2,0),ncor-1) #!!!This was the old line !!!
+    #ix_c12 = np.minimum(np.maximum(xy[1]-xy[0]+ncor//2,0),ncor-1) #XXX New (temporary?) line XXX
     todcor = (c1[xy[0]] + alpha_norm*c2[xy[1]])/np.sqrt(1 + 2*alpha_norm*c12[ix_c12] + alpha_norm**2)
     
     print("Max correlation: {0:5.2f}".format(np.max(todcor)))
@@ -642,6 +651,8 @@ def calc_rv_todcor(spect,wave,sig, template_fns,bad_intervals=[],fig_fn='',\
     
     p = fit_p(p_init, xy_fit[0], xy_fit[1], todcor[xym[0]-hw_fit:xym[0]+hw_fit+1, 
                                                    xym[1]-hw_fit:xym[1]+hw_fit+1])
+
+    #import pdb; pdb.set_trace()
 
     rv_x = drv*((p.parameters[1] + xym[1]) - ncor//2)
     rv_y = drv*((p.parameters[2] + xym[0]) - ncor//2)

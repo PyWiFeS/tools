@@ -46,7 +46,7 @@ rv,rv_sig = calc_rv_template(spectrum,wave,sig,'template_conv', ([0,5400],[6870,
 rv,rv_sig = calc_rv_template(spectrum,wave,sig,template_fns, ([0,5400],[6870,6890]))
 
 ** To test the flux normalization of todcor **
-margaret_dir = '/Users/mireland/Dropbox/Margaret Masters/RV_templates_flux'
+margaret_dir = '/Users/mireland/Dropbox/Margaret Masters/RV_templates_flux/'
 margaret_dir = '/Users/mireland/python/pywifes/tools/margaret/'
 template_fns = glob.glob(margaret_dir+'*txt')
 margaret_dir = '/Users/mireland/data/wifes/rvs_p08files/'
@@ -158,11 +158,38 @@ def weighted_extract_spectrum(flux_stamp, readout_var=11.0):
     Based on a p08 file axis ordering.
     
     Readout variance is roughly 11 in the p08 extracted spectra
+    
+    Parameters
+    ----------
+    flux_stamp: numpy array
+        nx x ny x nwave IFU image as a function of wavelength
+    
+    readout_var: float (optional)
+        Readout variance in extracted spectrum in DN.
+    
+    TODO: 
+    1) Look for and remove bad pix/cosmic rays.
+    2) Remove dodgy constant for readout_var.
     """
+    #Find the median flux over all wavelengths, limiting to be >0
     flux_med = np.maximum(np.median(flux_stamp,axis=2),0)
-    weights = flux_med/(flux_med + readout_var)
-    spectrum = np.array([np.sum(flux_stamp[:,:,i]*weights) for i in range(flux_stamp.shape[2])])
+    
+    pixel_var = flux_med + readout_var
+    weights = flux_med/pixel_var
+    n_spaxels = np.prod(weights.shape)
+
+    #Form a weighted average, then multiply by n_spaxels to get a sum
+    spectrum = n_spaxels * np.array([np.sum(flux_stamp[:,:,i]*weights)/np.sum(weights) for i in range(flux_stamp.shape[2])]) 
+    spectrum = np.array([np.sum(flux_stamp[:,:,i]*weights) for i in range(flux_stamp.shape[2])]) 
+    
+    #Old calculation of sigma.  Lets be a little more readable!
     sig = np.array([np.sqrt(np.sum((np.maximum(flux_stamp[:,:,i],0)+readout_var)*weights**2)) for i in range(flux_stamp.shape[2])])
+
+    #The variance of each pixel is flux_stamp + readout_var, with flux_stamp being an estimate
+    #of flux per pixel, which should not be less than zero.
+    #var = [np.sum((np.maximum(flux_stamp[:,:,i],0)+readout_var)*weights**2)/np.sum(weights)**2 for i in range(flux_stamp.shape[2])]
+    #sig = n_spaxels * np.sqrt(np.array(var))
+    
     return spectrum,sig
     
 def conv_ambre_spect(ambre_dir,ambre_conv_dir):

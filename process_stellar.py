@@ -651,7 +651,7 @@ def calc_rv_todcor(spect,wave,sig, template_fns,bad_intervals=[],fig_fn='',\
     ix_c12 = np.minimum(np.maximum(xy[0]-xy[1]+ncor//2,0),ncor-1) #!!!This was the old line !!!
     #ix_c12 = np.minimum(np.maximum(xy[1]-xy[0]+ncor//2,0),ncor-1) #XXX New (temporary?) line XXX
     todcor = (c1[xy[0]] + alpha_norm*c2[xy[1]])/np.sqrt(1 + 2*alpha_norm*c12[ix_c12] + alpha_norm**2)
-    
+        
     print("Max correlation: {0:5.2f}".format(np.max(todcor)))
     #print(alpha_norm)
     #plt.plot(drv*(np.arange(nwave_log)-nwave_log//2),np.roll(c1,nwave_log//2))

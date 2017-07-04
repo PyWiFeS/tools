@@ -77,6 +77,29 @@ from readcol import readcol
 from mpl_toolkits.mplot3d import Axes3D
 from astropy.modeling import models, fitting
 
+def find_nearest(array,value):
+    idx = (np.abs(array-value)).argmin()
+    return array[idx]
+
+def onclick(event):
+    global ix, iy
+    ix, iy = event.xdata, event.ydata
+    
+    # print 'x = %d, y = %d'%(
+    #     ix, iy)
+    
+    # assign global variable to access outside of function
+    global coords
+    coords.append((ix, iy))
+    
+    # Disconnect after 2 clicks
+    if len(coords) == 2:
+        fig.canvas.mpl_disconnect(cid)
+        plt.close(1)
+    return
+
+coords = []
+
 def read_and_find_star_p11(fn, manual_click=False, npix=7, subtract_sky=True,sky_rad=2):
     """Read in a cube and find the star.
     Return a postage stamp around the star and the coordinates
@@ -127,16 +150,39 @@ def read_and_find_star_p08(fn, manual_click=False, npix=7, subtract_sky=True,sky
         Number of pixels to extract
     """
     a = pyfits.open(fn)
+    Obj_name = a[0].header['OBJECT']
+    Obs_date = a[0].header['DATE-OBS'].split('T')[0]
+    RA = a[0].header['RA']
+    DEC = a[0].header['DEC']
     #Assume Stellar mode.
     flux = np.array([a[i].data for i in range(1,13)])
     wave = a[1].header['CRVAL1'] + np.arange(flux.shape[2])*a[1].header['CDELT1']
     image = np.median(flux,axis=2)
     #!!! 1->7 is a HACK - because WiFeS seems to often fail on the edge pixels !!!
-    maxpx = np.unravel_index(np.argmax(image[1:-1,7:-1]),image[1:-1,7:-1].shape)
-    maxpx = (maxpx[0]+1,maxpx[1]+7)
+    plt.clf()
+    global fig
+    fig = plt.figure(1)
+    plt.imshow(image,interpolation='nearest')
+    if manual_click == True:
+        global coords
+
+        # Call click func
+        global cid
+        cid = fig.canvas.mpl_connect('button_press_event', onclick)
+
+        plt.show(1)
+        maxpx = (int(round(np.min([coords[0][1], coords[1][1]]))), int(round(np.min([coords[0][0], coords[1][0]]))))
+        coords = []
+    else:
+        maxpx = np.unravel_index(np.argmax(image[:,10:-10]),image[:,10:-10].shape)
+        maxpx = (maxpx[0],maxpx[1]+10)
     plt.clf()
     plt.imshow(image,interpolation='nearest')
     plt.plot(maxpx[1],maxpx[0],'wx')
+    plt.colorbar(fraction=0.0155, pad=0.0)
+    plt.xlabel('x pixel')
+    plt.ylabel('y pixel')
+    plt.title(str(Obj_name) + '_' + str(Obs_date) + '_(' + str(RA) + ',' + str(DEC) + ')')
     if subtract_sky:
         xy = np.meshgrid(range(image.shape[1]),range(image.shape[0]))
         dist = np.sqrt((xy[0]-maxpx[1])**2.0 + (xy[1]-maxpx[0])**2.0)
@@ -149,7 +195,7 @@ def read_and_find_star_p08(fn, manual_click=False, npix=7, subtract_sky=True,sky
     xmin = np.min([np.max([maxpx[1]-npix//2,0]),image.shape[1]-npix])
     flux_stamp = flux[ymin:ymin+npix,xmin:xmin+npix,:]
     if len(fig_fn)>0:
-        plt.savefig(fig_fn)
+        plt.savefig(fig_fn, bbox_inches='tight')
     return flux_stamp,wave
     
 def weighted_extract_spectrum(flux_stamp, readout_var=11.0):
@@ -253,7 +299,7 @@ def conv_phoenix_spect(pho_dir,pho_conv_dir):
 		print('convolving '+ str(ii+1) +' out of ' + str(len(infns)))
    
     
-def make_wifes_p08_template(ddir, fn, out_dir, star,rv=0.0):
+def make_wifes_p08_template(fn, out_dir,rv=0.0):
     """From a p08 file, create a template spectrum for future cross-correlation.
     The template is interpolated onto a 0.1 Angstrom grid (to match higher resolution 
     templates.
@@ -270,13 +316,14 @@ def make_wifes_p08_template(ddir, fn, out_dir, star,rv=0.0):
         Output directory
     
     """
-    flux_stamp,wave = read_and_find_star_p08(ddir + '/' + fn)
-    heliocentric_correction = pyfits.getheader(ddir + '/' + fn)['RADVEL']
+    flux_stamp,wave = read_and_find_star_p08(fn)
+    heliocentric_correction = pyfits.getheader(fn)['RADVEL']
+    star = pyfits.getheader(fn)['OBJECT']
     spectrum,sig = weighted_extract_spectrum(flux_stamp)
     dell_template = 0.1
     wave_template=np.arange(90000)*dell_template + 3000
     spectrum_interp = np.interp(wave_template,wave*(1 - (rv - heliocentric_correction)/2.998e5),spectrum)
-    outfn = out_dir + '/' + star + ':' + fn
+    outfn = out_dir + star + ':' + fn.split('/')[-1]
     pyfits.writeto(outfn,spectrum_interp,clobber=True)
     
 
@@ -332,7 +379,7 @@ def make_fake_binary(spect,wave,sig, template_fns, flux_ratio, rv0, rv1):
     #return binspect, wave_log, np.ones(len(binspect))*0.01
     return fake_binary, wave_templates[0], np.ones(len(wave_templates[0]))*0.01
 
-def interpolate_spectra_onto_log_grid(spect,wave,sig, template_fns,bad_intervals=[],\
+def interpolate_spectra_onto_log_grid(spect,wave,sig, template_dir,bad_intervals=[],\
         smooth_distance=201,convolve_template=True, nwave_log=int(1e4), subtract_smoothed=True):
     """Interpolate both the target and template spectra onto a common wavelength grid"""
     
@@ -368,6 +415,7 @@ def interpolate_spectra_onto_log_grid(spect,wave,sig, template_fns,bad_intervals
         spect_int -= np.convolve(spect_int,np.ones(smooth_distance)/smooth_distance,'same')
     
     #Now we find the interpolated template spectra, template_ints
+    template_fns = template_dir
     template_ints = np.zeros( (len(template_fns),len(wave_log)) )
     for i,template_fn in enumerate(template_fns):
         try:
@@ -433,9 +481,9 @@ def interpolate_spectra_onto_log_grid(spect,wave,sig, template_fns,bad_intervals
         
     return wave_log, spect_int, sig_int, template_ints
     
-def calc_rv_template(spect,wave,sig, template_fns,bad_intervals,smooth_distance=101, \
+def calc_rv_template(spect,wave,sig, template_dir,bad_intervals,smooth_distance=101, \
     gaussian_offset=1e-4,nwave_log=1e4,oversamp=1,fig_fn='',convolve_template=True,\
-    starnumber=0, plotit=False):
+    starnumber=0, plotit=False, save_figures=False, save_dir='./', heliocentric_correction=0.):
     """Compute a radial velocity based on an best fitting template spectrum.
     Teff is estimated at the same time.
     
@@ -472,11 +520,17 @@ def calc_rv_template(spect,wave,sig, template_fns,bad_intervals,smooth_distance=
     temp: int
         Temperature of model spectrum used for cross-correlation.
     """
+    if isinstance(template_dir, list):
+        template_fns = template_dir
+    else:
+        template_fns = glob.glob(template_dir)
+    
+    #ADD IN HELIOCENTRIC CORRECTION SOMEWHERE:
+    #Make the Heliocentric correction...
+    #rv += h['RADVEL']
+    
     #Interpolate the target and template spectra.
-    (wave_log, spect_int, sig_int, template_ints) =  \
-        interpolate_spectra_onto_log_grid(spect,wave,sig, template_fns,\
-            bad_intervals=bad_intervals, smooth_distance=smooth_distance, \
-            convolve_template=convolve_template, nwave_log=nwave_log)
+    (wave_log, spect_int, sig_int, template_ints) = interpolate_spectra_onto_log_grid(spect,wave,sig, template_fns,bad_intervals=bad_intervals, smooth_distance=smooth_distance,convolve_template=convolve_template, nwave_log=nwave_log)
         
     #Do a cross-correlation to the nearest "spectral pixel" for each template
     drv = np.log(wave_log[1]/wave_log[0])*2.998e5
@@ -484,31 +538,51 @@ def calc_rv_template(spect,wave,sig, template_fns,bad_intervals,smooth_distance=
     peaks = np.zeros(len(template_fns))
     for i,template_fn in enumerate(template_fns):
         template_int = template_ints[i]
+        if save_figures == True:
+            plt.clf()
+            plt.plot(wave_log, template_int, label='template')
+            plt.plot(wave_log, spect_int, label='spectrum')
+            plt.title('Template no.'+str(i+1))
+            plt.savefig(save_dir + 'spectrum_vs_template_' + template_fns[i].split('/')[-1].split('.fits')[0] + '.png')
+            plt.clf()
         cor = np.correlate(spect_int,template_int,'same')
         ##here it's a good idea to limit where the peak Xcorrelation can be, only search for a peak within 1000 of rv=0
         ## that's and RV range of -778 to 778 for the default spacings in the code
-        peaks[i] = np.max(cor[nwave_log/2-100:nwave_log/2+100])/np.sqrt(np.sum(np.abs(template_int)**2))
-        rvs[i] = (np.argmax(cor[nwave_log/2-100:nwave_log/2+100])-100)*drv 
+        peaks[i] = np.max(cor[int(nwave_log/2)-100:int(nwave_log/2)+100])/np.sqrt(np.sum(np.abs(template_int)**2))
+        rvs[i] = (np.argmax(cor[int(nwave_log/2)-100:int(nwave_log/2)+100])-100)*drv
         if starnumber == 0: print('Correlating Template ' + str(i+1)+' out of ' + str(len(template_fns)))
         if starnumber >0  : print('Correlating Template ' + str(i+1)+' out of ' + str(len(template_fns)) +' for star '+str(starnumber))
+        this_rvs = drv*(np.arange(2*smooth_distance)-smooth_distance)
+        correlation = cor[int(nwave_log/2)-100:int(nwave_log/2)+100]/np.sqrt(np.sum(np.abs(template_int)**2))
+        best_ind = np.argmax(correlation)
+        print("best RV for template "+str(i+1)+" is "+str(this_rvs[best_ind+1] + heliocentric_correction))
+        if save_figures == True:
+            plt.clf()
+            plt.plot(this_rvs[1:-1], correlation/np.max(correlation))
+            plt.title('Correlation_with_template_no.'+str(i+1))
+            plt.savefig(save_dir + 'Correlation_with_template_no' + str(i+1) + '.png')
+            plt.clf()
+    
     
     #Find the best cross-correlation.
     ix = np.argmax(peaks)
+    print("BEST TEMPLATE:"+template_fns[ix].split('/')[-1])
 
     #Recompute and plot the best cross-correlation
     template_int = template_ints[ix,:]
     cor = np.correlate(spect_int,template_int,'same')
     plt.clf()
     plt.plot(drv*(np.arange(2*smooth_distance)-smooth_distance), 
-             cor[nwave_log/2-smooth_distance:nwave_log/2+smooth_distance])
+             cor[int(nwave_log/2)-smooth_distance:int(nwave_log/2)+smooth_distance])
 
     ##store the figure data for later use
-    outsave = np.array([drv*(np.arange(2*smooth_distance)-smooth_distance),cor[nwave_log/2-smooth_distance:nwave_log/2+smooth_distance]])
+    outsave = np.array([drv*(np.arange(2*smooth_distance)-smooth_distance),cor[int(nwave_log/2)-smooth_distance:int(nwave_log/2)+smooth_distance]])
     saveoutname = fig_fn.split('.png')[0] + "_figdat.pkl"
     pickle.dump(outsave,open(saveoutname,"wb"))
     
     plt.xlabel('Velocity (km/s)')
     plt.ylabel('X Correlation')
+    #plt.show()
     fn_ix = template_fns[ix].rfind('/')
     #Dodgy! Need a better way to find a name for the template.
     fn_ix_delta = template_fns[ix][fn_ix:].find(':')
@@ -531,7 +605,8 @@ def calc_rv_template(spect,wave,sig, template_fns,bad_intervals,smooth_distance=
     #x = res.x
     #fval = res.fun
     x,fval,ierr,numfunc = op.fminbound(rv_fit_mlnlike,rvs[ix]/drv-5/drv,rvs[ix]/drv+5/drv,args=(modft,spect_int,sig_int,gaussian_offset),full_output=True)
-    rv = x*drv	
+    rv = x*drv
+    rv += heliocentric_correction
     ##best model 
     shifted_mod = np.fft.irfft(modft * np.exp(-2j * np.pi * np.arange(len(modft))/len(spect_int) * x))
     #pdb.set_trace()
@@ -544,13 +619,23 @@ def calc_rv_template(spect,wave,sig, template_fns,bad_intervals,smooth_distance=
         print("WARNING: Radial velocity fit did not work - trying again with wider range for: " + fig_fn)
         x,fval,ierr,numfunc = op.fminbound(rv_fit_mlnlike,rvs[ix]/drv-10/drv,rvs[ix]/drv+10/drv,args=(modft,spect_int,sig_int,gaussian_offset),full_output=True)
         rv = x*drv
+        #print("RV ="+str(rv)+", fval ="+str(fval))
         fplus = rv_fit_mlnlike(x+0.5,modft,spect_int,sig_int,gaussian_offset)
+        #print("fplus ="+str(fplus))
         fminus = rv_fit_mlnlike(x-0.5,modft,spect_int,sig_int,gaussian_offset)
+        #print("fminus ="+str(fminus))
         hess_inv = 0.5**2/(fplus +  fminus - 2*fval)
+        #print("hess_inv ="+str(hess_inv))
+        #import pdb
+        #pdb.set_trace()
+        
         if (hess_inv < 0) | (fplus < fval) | (fminus < fval):
             print("WARNING: Radial velocity fit did not work, giving up with NaN uncertainty")
         
     rv_sig = np.sqrt(hess_inv*nwave_log/len(spect)/oversamp)*drv
+
+    plt.title('RV, RV_sigma:' + str(rv) + ',' +str(rv_sig))
+    plt.savefig(save_dir + 'Best_correlation_temp_' + template_fns[ix].split('/')[-1] + '.png')
     plt.title(name_string + ', RV = {0:4.1f}+/-{1:4.1f} km/s'.format(rv,rv_sig))
     if len(fig_fn) > 0:
         plt.savefig(fig_fn)
@@ -567,7 +652,7 @@ def calc_rv_template(spect,wave,sig, template_fns,bad_intervals,smooth_distance=
     saveoutname = fig_fn.split('_xcor.png')[0] + 'fitplot_figdat.pkl'
     pickle.dump(outsave,open(saveoutname,"wb"))
    # pdb.set_trace()
-    return rv,rv_sig
+    return rv,rv_sig,template_fns[ix].split('/')[-1]
         
 def calc_rv_todcor(spect,wave,sig, template_fns,bad_intervals=[],fig_fn='',\
     smooth_distance=201,convolve_template=True, alpha=0.3,\
@@ -798,8 +883,6 @@ def rv_process_dir(ddir,template_conv_dir='./ambre_conv/',standards_dir='',outfn
         specfile.close()
         rv,rv_sig,name = calc_rv_template(spectrum,wave,sig,template_conv_dir, bad_intervals,\
             fig_fn=outdir + '/' + h['OBJNAME'] + '.' + h['OBSID'] + '_xcor.png',starnumber=iii+1)
-        #Make the Heliocentric correction...
-        rv += h['RADVEL']
         outfile.write(h['OBJNAME'] + ','+fn +','+ h['RA'] + ','+ h['DEC'] + ',' + h['BEAMSPLT'] + \
          ',{0:10.3f},{1:5.1f},{2:5.1f},'.format(h['MJD-OBS'],rv,rv_sig)+name + ' \n')
         texfile.write(h['OBJNAME'] + ' & '+ h['RA'] + ' & '+ h['DEC'] + ' & ' + h['BEAMSPLT'] + \

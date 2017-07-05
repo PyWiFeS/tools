@@ -453,6 +453,7 @@ def interpolate_spectra_onto_log_grid(spect,wave,sig, template_dir,bad_intervals
             
         #Amount of subsampling in the template
         template_subsamp = int((wave[1]-wave[0])/dell_template)
+        
         #Make sure it is an odd number to prevent shifting...
         template_subsamp = np.maximum((template_subsamp//2)*2 - 1,1)
         spect_template = np.convolve(np.convolve(spect_template,np.ones(template_subsamp)/template_subsamp,'same'),\
@@ -460,8 +461,10 @@ def interpolate_spectra_onto_log_grid(spect,wave,sig, template_dir,bad_intervals
 
         #Interpolate onto the log wavelength grid.
         template_int = np.interp(wave_log,wave_template,spect_template)
+        
         #Normalise 
         template_int /= np.median(template_int)
+        
         #Remove bad intervals 
         for interval in bad_intervals:
             wlo = np.where(wave_log > interval[0])[0]
@@ -657,7 +660,7 @@ def calc_rv_template(spect,wave,sig, template_dir,bad_intervals,smooth_distance=
 def calc_rv_todcor(spect,wave,sig, template_fns,bad_intervals=[],fig_fn='',\
     smooth_distance=201,convolve_template=True, alpha=0.3,\
     nwave_log=int(1e4),ncor=1000, return_fitted=False,jd=0.0,out_fn='',\
-    heliocentric_correction=0, plotit=False):
+    heliocentric_correction=0, plotit=False, window_divisor=20):
     """Compute a radial velocity based on an best fitting template spectrum.
     Teff is estimated at the same time.
     
@@ -704,7 +707,7 @@ def calc_rv_todcor(spect,wave,sig, template_fns,bad_intervals=[],fig_fn='',\
       
     #*** Next (hopefully with two templates only!) we continue and apply the TODCOR algorithm.
     
-    window_width = nwave_log//20
+    window_width = nwave_log//window_divisor
     ramp = np.arange(1,window_width+1,dtype=float)/window_width
     window = np.ones(nwave_log)
     window[:window_width] *= ramp

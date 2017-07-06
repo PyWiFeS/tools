@@ -74,6 +74,7 @@ import pdb
 import glob
 import pickle
 from readcol import readcol
+from scipy.interpolate import InterpolatedUnivariateSpline
 from mpl_toolkits.mplot3d import Axes3D
 from astropy.modeling import models, fitting
 
@@ -380,7 +381,8 @@ def make_fake_binary(spect,wave,sig, template_fns, flux_ratio, rv0, rv1):
     return fake_binary, wave_templates[0], np.ones(len(wave_templates[0]))*0.01
 
 def interpolate_spectra_onto_log_grid(spect,wave,sig, template_dir,bad_intervals=[],\
-        smooth_distance=201,convolve_template=True, nwave_log=int(1e4), subtract_smoothed=True):
+        smooth_distance=201,convolve_template=True, nwave_log=int(1e4), \
+        subtract_smoothed=True, interp_k=1, convolve_template=True):
     """Interpolate both the target and template spectra onto a common wavelength grid"""
     
     #Create our logarithmic wavelength scale with the same min and max wavelengths as the
@@ -389,8 +391,12 @@ def interpolate_spectra_onto_log_grid(spect,wave,sig, template_dir,bad_intervals
         nwave_log*np.arange(nwave_log))
     
     #Interpolate the target spectrum onto this scale
-    spect_int = np.interp(wave_log,wave,spect)
-    sig_int = np.interp(wave_log,wave,sig)
+    #spect_int = np.interp(wave_log,wave,spect)
+    #sig_int = np.interp(wave_log,wave,sig)
+    spl = InterpolatedUnivariateSpline(wave, spect, k=interp_k)
+    spect_int = spl(wave_log)
+    spl = InterpolatedUnivariateSpline(wave, sig, k=interp_k)
+    sig_int = spl(wave_log)
     
     #Normalise 
     sig_int /= np.median(spect_int)
@@ -450,17 +456,20 @@ def interpolate_spectra_onto_log_grid(spect,wave,sig, template_dir,bad_intervals
         except:
             print('Error loading model spectrum')
             raise UserWarning
-            
-        #Amount of subsampling in the template
-        template_subsamp = int((wave[1]-wave[0])/dell_template)
+          
+        if convolve_template:  
+            #Amount of subsampling in the template
+            template_subsamp = int((wave[1]-wave[0])/dell_template)
         
-        #Make sure it is an odd number to prevent shifting...
-        template_subsamp = np.maximum((template_subsamp//2)*2 - 1,1)
-        spect_template = np.convolve(np.convolve(spect_template,np.ones(template_subsamp)/template_subsamp,'same'),\
-                                  np.ones(2*template_subsamp+1)/(2*template_subsamp+1),'same')
+            #Make sure it is an odd number to prevent shifting...
+            template_subsamp = np.maximum((template_subsamp//2)*2 - 1,1)
+            spect_template = np.convolve(np.convolve(spect_template,np.ones(template_subsamp)/template_subsamp,'same'),\
+                                      np.ones(2*template_subsamp+1)/(2*template_subsamp+1),'same')
 
         #Interpolate onto the log wavelength grid.
-        template_int = np.interp(wave_log,wave_template,spect_template)
+        #template_int = np.interp(wave_log,wave_template,spect_template)
+        spl = InterpolatedUnivariateSpline(wave_template,spect_template, k=interp_k)
+        template_int = spl(wave_log)
         
         #Normalise 
         template_int /= np.median(template_int)
@@ -700,7 +709,7 @@ def calc_rv_todcor(spect,wave,sig, template_fns,bad_intervals=[],fig_fn='',\
         interpolate_spectra_onto_log_grid(spect,wave,sig, template_fns,\
             bad_intervals=bad_intervals, smooth_distance=smooth_distance, \
             convolve_template=convolve_template, nwave_log=nwave_log)
-        
+                
     rvs = np.zeros(len(template_fns))
     peaks = np.zeros(len(template_fns))
     drv = np.log(wave_log[1]/wave_log[0])*2.998e5

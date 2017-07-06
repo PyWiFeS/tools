@@ -4,12 +4,23 @@ using process_stellar to extract the radial velocities using TODCOR"""
 from __future__ import division, print_function
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy.interpolate import UnivariateSpline
+from scipy.interpolate import InterpolatedUnivariateSpline
 import process_stellar
 plt.ion()
 
 dir = 'RV_templates/'
 infiles = [dir + '9000g40p00k2v50.txt', dir + '5250g35p00k2v50.txt']
 rvs = [50, -150]
+rvs = [-120, 80]
+rvs = [-130, 70]
+rvs = [-140, 60]
+rvs = [-150, 50]
+rvs = [-160, 40]
+rvs = [170, -30]
+rvs = [0,150]
+rvs = np.array(rvs) - 40
+#rvs = [-150, 50]
 #rvs = [-50, 150]
 #rvs = [20, -50]
 #rvs = [-20, 50]
@@ -29,8 +40,11 @@ spect = np.zeros(nwave)
 #Add in each template by interpolating onto the new wavelength grid.
 for fname, rv, flux in zip(infiles, rvs, fluxes):
     wave_spect = np.loadtxt(fname)
-    spect += flux*np.interp(wave_pixelated, wave_spect[:,0]*(1+rv/3e5), wave_spect[:,1]/np.median(wave_spect[:,1]))
-    #import pdb; pdb.set_trace()
+    x = wave_spect[:,0]*(1+rv/3e5)
+    y = wave_spect[:,1]/np.median(wave_spect[:,1])
+    spl = InterpolatedUnivariateSpline(x, y, k=3)
+    spect += flux*spl(wave_pixelated)
+    
     
 #Convolve to the resolution of the spectrograph (2 pixels)
 g = 0.5**np.arange(-2,3)**2
@@ -39,10 +53,12 @@ spect += np.median(spect)*np.random.normal(size=len(spect))/snr
 
 sig = np.ones_like(spect)*np.median(spect)/snr
 results = \
-    process_stellar.calc_rv_todcor(spect,wave_pixelated, sig, infiles, plotit=True, smooth_distance=201, window_divisor=20)
+    process_stellar.calc_rv_todcor(spect,wave_pixelated, sig, infiles, plotit=True, \
+        smooth_distance=201, window_divisor=20, nwave_log=int(5e4))
     
 print(results)
 print("Computed delta RV: {0:6.2f} +/- {1:6.2f}".format(results[0]-results[2], np.sqrt(results[1]**2 + results[3]**2)))
 print("Actual delta RV: {0:6.2f}".format(rvs[0]-rvs[1]))
 print("Computed mean RV: {0:6.2f} +/- {1:6.2f}".format((results[0]+results[2])*.5, np.sqrt(results[1]**2 + results[3]**2)/2))
 print("Actual mean RV: {0:6.2f}".format((rvs[0]+rvs[1])*.5))
+print("Difference: {0:6.2f} +/- {1:6.2f}".format((results[0]+results[2])*.5 - (rvs[0]+rvs[1])*.5, np.sqrt(results[1]**2 + results[3]**2)/2))

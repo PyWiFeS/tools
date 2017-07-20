@@ -1,7 +1,8 @@
 """After analysis with WiFeS, this suite of routines can extract a star optimally
 and calculate its radial velocity.
 
-WARNING - this code is extremely rough in its initial commit
+WARNING - this code is still not properly documented or complete. Any contributions
+welcome!
 
 example lines of code...
 
@@ -10,54 +11,6 @@ rv_process_dir('PROCESSED_DATA_DIRECTORY', outdir =/priv/mulga1/mstream/wifes/wi
 
 fn = 'T2m3wr-20140617.144009-0167.p11.fits'
 flux,sig,wave = read_and_find_star_p11(fn)
-
-fn = 'T2m3wr-20140617.144009-0167.p08.fits'
-
-*** 5 lines below to run todcor ***
-%run process_stellar
-#fn = 'C:/Users/Margaret/MPhil/rvs_p08files/T2m3wb-20141110.103724-0816.p08.fits'
-#flux,wave = read_and_find_star_p08(fn)
-
-
-files = glob.glob('C:/Users/Margaret/MPhil/rvs_p08files_TTHor_2016/*.fits')
-base_path = 'C:/Users/Margaret/MPhil/rvs_p08files_TTHor_2016/'
-for file in files:  
-    file_num = int(file.split('.')[1].split('-')[1])
-    flux,wave = read_and_find_star_p08(file)
-    spectrum,sig = weighted_extract_spectrum(flux)
-    helcor = pyfits.getheader(file)['RADVEL']
-    wave_log, spect_int, model_spect = calc_rv_todcor(spectrum,wave,sig,\
-        ['C:/Users/Margaret/MPhil/RV_templates/8500g40p00k2v50.txt',\
-        'C:/Users/Margaret/MPhil/RV_templates/5000g35p00k2v50.txt'],\
-        alpha=0.1,out_fn='rvs.txt',jd=file_num,return_fitted=True,\
-        heliocentric_correction=helcor)
-
-    plt.clf()
-    plt.plot(wave_log, spect_int, label='Data')
-    plt.plot(wave_log, model_spect, label='Model')
-    plt.legend()
-    plt.xlabel('Wavelength')
-
-*** lines below test todcor ***
-binspect,binwave,binsig=make_fake_binary(spectrum, wave, sig, ['RV_templates/9000g40p00k2v150.txt','RV_templates/5250g35p00k2v150.txt'],0.5,-200,+200)
-calc_rv_todcor(binspect,binwave,binsig,['RV_templates/9000g40p00k2v150.txt','RV_templates/5250g35p00k2v150.txt'],alpha=0.5)
-
-rv,rv_sig = calc_rv_template(spectrum,wave,sig,'template_conv', ([0,5400],[6870,6890]))
-rv,rv_sig = calc_rv_template(spectrum,wave,sig,template_fns, ([0,5400],[6870,6890]))
-
-** To test the flux normalization of todcor **
-margaret_dir = '/Users/mireland/Dropbox/Margaret Masters/RV_templates_flux/'
-margaret_dir = '/Users/mireland/python/pywifes/tools/margaret/'
-template_fns = glob.glob(margaret_dir+'*txt')
-margaret_dir = '/Users/mireland/data/wifes/rvs_p08files/'
-
-#flux, wave = read_and_find_star_p08(margaret_dir + 'T2m3wb-20141110.113949-0831.p08.fits')
-#flux, wave = read_and_find_star_p08(margaret_dir + 'T2m3wb-20141108.120006-0389.p08.fits')
-flux, wave = read_and_find_star_p08(margaret_dir + 'T2m3wb-20141110.114748-0832.p08.fits')
-spectrum, sig = weighted_extract_spectrum(flux)
-dummy = calc_rv_todcor(spectrum, wave,sig, [template_fns[3], template_fns[1]], bad_intervals=[[0,3810], [5005, 5028]], alpha=0.25, plotit=True)
-dummy = calc_rv_todcor(spectrum, wave,sig, [template_fns[3], template_fns[1]], bad_intervals=[[0,4200], [5067,5075],[5500,6000]], alpha=0.25, plotit=True)
-dummy = calc_rv_todcor(spectrum, wave,sig, [template_fns[2], template_fns[1]], bad_intervals=[[0,4200], [5067,5075],[5500,6000]], alpha=0.25, plotit=True)
 
 """
 
@@ -77,6 +30,7 @@ from readcol import readcol
 from scipy.interpolate import InterpolatedUnivariateSpline
 from mpl_toolkits.mplot3d import Axes3D
 from astropy.modeling import models, fitting
+plt.ion()
 
 def find_nearest(array,value):
     idx = (np.abs(array-value)).argmin()
@@ -382,7 +336,7 @@ def make_fake_binary(spect,wave,sig, template_fns, flux_ratio, rv0, rv1):
 
 def interpolate_spectra_onto_log_grid(spect,wave,sig, template_dir,bad_intervals=[],\
         smooth_distance=201,convolve_template=True, nwave_log=int(1e4), \
-        subtract_smoothed=True, interp_k=1, convolve_template=True):
+        subtract_smoothed=True, interp_k=1):
     """Interpolate both the target and template spectra onto a common wavelength grid"""
     
     #Create our logarithmic wavelength scale with the same min and max wavelengths as the
@@ -761,25 +715,33 @@ def calc_rv_todcor(spect,wave,sig, template_fns,bad_intervals=[],fig_fn='',\
     plt.imshow(todcor, cmap=cm.gray,interpolation='nearest',extent=[-drv*ncor/2,drv*ncor/2,-drv*ncor/2,drv*ncor/2])
 
     xym = np.unravel_index(np.argmax(todcor), todcor.shape)
-    hw_fit = 2
     
-    if (xym[0]< hw_fit) | (xym[1]< hw_fit) | (xym[0]>= ncor-hw_fit) | (xym[1]>= ncor-hw_fit):
-        print("Error: TODCOR peak to close to edge!")
-        raise UserWarning
+    old_fit = False
+    if (old_fit):
+        hw_fit = 1 #2
     
-    ix_fit = np.arange(-hw_fit, hw_fit + 1).astype(int)
-    xy_fit = np.meshgrid(ix_fit,ix_fit)
-    p_init = models.Gaussian2D(amplitude=np.max(todcor),x_mean=0, y_mean=0, 
-        x_stddev = 50.0/drv, y_stddev = 50.0/drv)
-    fit_p = fitting.LevMarLSQFitter()
+        if (xym[0]< hw_fit) | (xym[1]< hw_fit) | (xym[0]>= ncor-hw_fit) | (xym[1]>= ncor-hw_fit):
+            print("Error: TODCOR peak to close to edge!")
+            raise UserWarning
     
-    p = fit_p(p_init, xy_fit[0], xy_fit[1], todcor[xym[0]-hw_fit:xym[0]+hw_fit+1, 
-                                                   xym[1]-hw_fit:xym[1]+hw_fit+1])
+        ix_fit = np.arange(-hw_fit, hw_fit + 1).astype(int)
+        xy_fit = np.meshgrid(ix_fit,ix_fit)
+        p_init = models.Gaussian2D(amplitude=np.max(todcor),x_mean=0, y_mean=0, 
+            x_stddev = 50.0/drv, y_stddev = 50.0/drv)
+        fit_p = fitting.LevMarLSQFitter()
+    
+        p = fit_p(p_init, xy_fit[0], xy_fit[1], todcor[xym[0]-hw_fit:xym[0]+hw_fit+1, 
+                                                       xym[1]-hw_fit:xym[1]+hw_fit+1])
 
-    #import pdb; pdb.set_trace()
-
-    rv_x = drv*((p.parameters[1] + xym[1]) - ncor//2)
-    rv_y = drv*((p.parameters[2] + xym[0]) - ncor//2)
+        rv_x = drv*((p.parameters[1] + xym[1]) - ncor//2)
+        rv_y = drv*((p.parameters[2] + xym[0]) - ncor//2)
+    else:
+        pix = todcor[xym[0]-1:xym[0]+2, xym[1]]
+        xym_frac0 = (pix[2] - pix[0])/(2*pix[1] - pix[0] - pix[2])/2
+        pix = todcor[xym[0], xym[1]-1:xym[1]+2]
+        xym_frac1 = (pix[2] - pix[0])/(2*pix[1] - pix[0] - pix[2])/2
+        rv_x = drv*((xym_frac1 + xym[1]) - ncor//2)
+        rv_y = drv*((xym_frac0 + xym[0]) - ncor//2)
 
     model_spect = rv_shift_binary(rv_x/drv, rv_y/drv, alpha, np.fft.rfft(template_ints[0]), np.fft.rfft(template_ints[1]))
     
@@ -795,14 +757,22 @@ def calc_rv_todcor(spect,wave,sig, template_fns,bad_intervals=[],fig_fn='',\
             np.fft.rfft(template_int_norm[0]), np.fft.rfft(template_int_norm[1]))
         model_spect_sec = rv_shift_binary(rv_x/drv, rv_y/drv, 1e6, \
             np.fft.rfft(template_int_norm[0]), np.fft.rfft(template_int_norm[1]))
-        ss = np.ones(5e2)/5e2
-        model_ss = np.convolve(model_spect_norm, ss, mode='same')
-        spect_ss = np.convolve(spect_int_norm, ss, mode='same')
-        plt.clf()
-        plt.plot(wave_log, model_spect_norm/model_ss, label='Joint Model')
-        plt.plot(wave_log, model_spect_prim/model_ss/(1+alpha), label='Primary')
-        plt.plot(wave_log, model_spect_sec/model_ss*alpha/(1+alpha), label='Secondary')
-        plt.plot(wave_log, spect_int_norm/spect_ss, label='Data')
+        
+        #--- Old divisors as a dodgy attempt to deal with non-normalised
+        # data...  ---
+        #ss = np.ones(5e2)/5e2
+        #model_ss = np.convolve(model_spect_norm, ss, mode='same')
+        #spect_ss = np.convolve(spect_int_norm, ss, mode='same')
+        #plt.plot(wave_log, model_spect_norm/model_ss, label='Joint Model')
+        #plt.plot(wave_log, model_spect_prim/model_ss/(1+alpha), label='Primary')
+        #plt.plot(wave_log, model_spect_sec/model_ss*alpha/(1+alpha), label='Secondary')
+        #plt.plot(wave_log, spect_int_norm/spect_ss, label='Data')
+        
+        plt.clf()        
+        plt.plot(wave_log, model_spect_norm, label='Joint Model')
+        plt.plot(wave_log, model_spect_prim/(1+alpha), label='Primary')
+        plt.plot(wave_log, model_spect_sec*alpha/(1+alpha), label='Secondary')
+        plt.plot(wave_log, spect_int_norm, label='Data')
         plt.legend()
         plt.axis([3810, 5610, 0, 1.45])
         plt.xlabel(r'Wavelength ($\AA$)')
@@ -823,6 +793,11 @@ def calc_rv_todcor(spect,wave,sig, template_fns,bad_intervals=[],fig_fn='',\
         q_factor = np.sqrt(np.mean(wave2_on_s*model_spect_deriv**2))
         photon_rv_error = 3e5/q_factor*np.median(sig_int)/np.sqrt(len(spect))
         errors.append(photon_rv_error)
+        print("Q factor: {:5.2f}".format(q_factor))
+        #plt.clf()
+        #plt.plot(template_int)
+        #plt.pause(.01)
+        #import pdb; pdb.set_trace()
 
     #ISSUES: 
     #1) Error (below) not computed.

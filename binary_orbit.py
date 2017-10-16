@@ -9,7 +9,7 @@ Done some timing tests on my laptop: this procedure is dominated
 by calculation, not interpretation when there are more than 30 jds.
 
 Meaning of negative numbers:
-Negative eccentricity: change \omege by 180 degrees and T by half a
+Negative eccentricity: change \omega by 180 degrees and T by half a
  period.
 Negative inclination: the same as positive inclination!
 
@@ -18,11 +18,6 @@ jds = Time.now().jd -np.arange(100)*10
 my_orb = random_orbits()
 rho, theta, vr = binary_orbit(my_orb[2], jds)
 plt.plot(jds - Time.now().jd, vr)
-
-Get random inclinations on a *sphere* by:
-
-inc_rand = np.degrees(np.arccos(np.random.random(int(1e6))))
-
 
 Next step: use the (e.g.) 1e6 random orbits to simulate orbits for all
 binary stars, and then scale the orbits e.g. 10 times for each binary
@@ -65,6 +60,8 @@ def scale_rv(normalised_rvs, period_in_days, m1, m2, inclination):
     
     """
     
+    #params['i'] = np.degrees(np.arccos(np.random.random(int(n_orb))))
+    
     #FIXME should be from astropy.constants
     year_in_days = 365.25 
     AU_in_km = 150e6
@@ -78,7 +75,7 @@ def scale_rv(normalised_rvs, period_in_days, m1, m2, inclination):
     a1 = a1_plus_a2_in_AU * m2/(m1+m2)
     
     #Scale radial velocity to km/s
-    return normalised_rvs * a1 * AU_in_km / day_in_seconds * np.sin(np.radians(inclination))
+    return normalised_rvs * a1 * np.sin(np.radians(inclination)) * AU_in_km / day_in_seconds
     
 
 def random_orbits(p_prior_type='LogNorm', p_max=365.25*20, e_prior_type='Uniform', \
@@ -96,7 +93,7 @@ def random_orbits(p_prior_type='LogNorm', p_max=365.25*20, e_prior_type='Uniform
         Do we have a prior on inclination? If not, it will be set to 90 degrees, and
         the affect of the sin(i) distribution will happen later.
     """
-    params = np.zeros( (n_orb,7) )
+    params = {}
     
     #Start with period
     if p_prior_type == 'LogNorm':
@@ -104,44 +101,44 @@ def random_orbits(p_prior_type='LogNorm', p_max=365.25*20, e_prior_type='Uniform
         #Log period at the middle of each bin.
         logp_mid = 0.5*(logp_all[1:] + logp_all[:-1])
         #PDF at the middle of each bin
-        logp_pdf = np.exp(-(logp_mid-p_mean)**2/2/p_sdev**2)
+        logp_pdf = np.exp(-((logp_mid-p_mean)**2.)/(2.*(p_sdev**2.)))
         #Cumultative distribution function computation
         logp_cdf = np.append(0,np.cumsum(logp_pdf))
         logp_cdf /= logp_cdf[-1]
         #Invert this function through interpolation, and evaluate at
         #a bunch of points selected at random.
         logps = np.interp(np.random.random(n_orb), logp_cdf, logp_all)
-        params[:,1] = 10**logps
+        params['P'] = 10**logps
     else:
         return UserWarning("Period prior type not implemented yet!")
         
     if e_prior_type=='Uniform':
-        params[:,3] = e_max * np.random.random(n_orb)
+        params['e'] = e_max * np.random.random(n_orb)
     else:
         return UserWarning("Eccentricity prior type not implemented yet!")
         
     #Time of periastron passage
     #Set it to be a random fraction of 1 period in the past.
-    params[:,0] = Time.now().jd - params[:,1]*np.random.random(n_orb)
+    params['T0'] = Time.now().jd - params['P']*np.random.random(n_orb)
         
     #Now fill in the rest.
     if mass_prior is not None:
         return UserWarning("Mass prior type not implemented yet!")
     
-    #Semi-major axis to 1.0 (normalise later!)
-    params[:,2] = np.ones(n_orb)
+    #Semi-major axis to 1.0 (normalise later! (In function scale_rv?))
+    params['a'] = np.ones(n_orb)
     
     #Now fill in the rest.
     if i_prior is not None:
         return UserWarning("Inclination prior type not implemented yet!")
     else:
-        params[:,6] = np.ones(n_orb)*90
+        params['i'] = np.ones(n_orb)*90
 
     #Position angle of line of nodes.
-    params[:,4] = np.random.random(n_orb)*360
+    params['w'] = np.random.random(n_orb)*360
         
     #Longitude of perioastron
-    params[:,5] = np.random.random(n_orb)*360    
+    params['n'] = np.random.random(n_orb)*360
     
     return params
     
@@ -177,15 +174,15 @@ def binary_orbit(params, jds, niter_anomaly=5, do_deriv=False):
         velocity in units of semi major per unit per time  
     """
     #jds is a numpy array.
-    t = jds-params[0]
-    P = params[1]
-    a = params[2]
-    e = abs(params[3])
-    n = params[4]*np.pi/180.
-    w = params[5]*np.pi/180.
-    i = params[6]*np.pi/180.
+    t = jds-params['T0']
+    P = params['P']
+    a = params['a']
+    e = abs(params['e'])
+    n = params['n']*np.pi/180.
+    w = params['w']*np.pi/180.
+    i = params['i']*np.pi/180.
     #Allow a negative eccentricity to have the obvious meaning.
-    if (params[3] < 0):
+    if (params['e'] < 0):
         t += P/2.
         w += np.pi
 

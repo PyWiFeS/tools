@@ -1,6 +1,7 @@
 """
 To run, type:
 
+%run process_stellar
 %run test_process_stellar
 """
 from __future__ import print_function
@@ -14,7 +15,10 @@ import glob
 import pickle
 plt.ion()
 
-mode='fit' #fit, plot or test
+mode='plot' #fit, plot or test
+
+#From Margaret:
+#They were all obtained with 'T2m3wb-20141110.113949-0831.p08.fits', using RV_templates/8500g40p00k2v50.txt and 5000g35p00k2v50.txt and alpha =0.1.
 
 if mode=='fit':
     files = glob.glob('C:/Users/Margaret/MPhil/rvs_p08files_TTHor_2016/*.fits')
@@ -36,18 +40,19 @@ if mode=='fit':
         plt.legend()
         plt.xlabel('Wavelength')
 elif mode=='plot':
-    ** To test the flux normalization of todcor **
+    #** To test the flux normalization of todcor **
     templates_dir = '/Users/mireland/python/pywifes/tools/margaret/'
     template_fns = glob.glob(templates_dir+'*txt')
     plot_p08_dir = '/Users/mireland/data/wifes/rvs_p08files/'
+    plot_p08_dir = '/Users/mireland/python/pywifes/tools/margaret/'
 
-    flux, wave = read_and_find_star_p08(plot_p08_dir + 'T2m3wb-20141110.114748-0832.p08.fits')
+    flux, wave = read_and_find_star_p08(plot_p08_dir + 'T2m3wb-20141110.113949-0831.p08.fits')
     spectrum, sig = weighted_extract_spectrum(flux)
     dummy = calc_rv_todcor(spectrum, wave,sig, [template_fns[3], template_fns[1]], bad_intervals=[[0,3810], [5005, 5028]], alpha=0.25, plotit=True)
     #dummy = calc_rv_todcor(spectrum, wave,sig, [template_fns[3], template_fns[1]], bad_intervals=[[0,4200], [5067,5075],[5500,6000]], alpha=0.25, plotit=True)
     #dummy = calc_rv_todcor(spectrum, wave,sig, [template_fns[2], template_fns[1]], bad_intervals=[[0,4200], [5067,5075],[5500,6000]], alpha=0.25, plotit=True)
 elif mode=='test':
-    *** lines below test todcor ***
+    #*** lines below test todcor ***
     binspect,binwave,binsig=make_fake_binary(spectrum, wave, sig, ['RV_templates/9000g40p00k2v150.txt','RV_templates/5250g35p00k2v150.txt'],0.5,-200,+200)
     calc_rv_todcor(binspect,binwave,binsig,['RV_templates/9000g40p00k2v150.txt','RV_templates/5250g35p00k2v150.txt'],alpha=0.5)
 

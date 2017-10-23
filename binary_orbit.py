@@ -16,7 +16,7 @@ Negative inclination: the same as positive inclination!
 e.g.
 jds = Time.now().jd -np.arange(100)*10
 my_orb = random_orbits()
-rho, theta, vr = binary_orbit(my_orb[2], jds)
+rho, theta, vr = binary_orbit(my_orb, jds)
 plt.plot(jds - Time.now().jd, vr)
 
 Next step: use the (e.g.) 1e6 random orbits to simulate orbits for all
@@ -35,7 +35,18 @@ import pdb
 from astropy.time import Time
 plt.ion()
 
+def calc_likelihood(scaled_rvs, observed_rvs):
+    """
+        This function calculates the likelihood of an orbit fitting the observed data
+    """
+    chi_squared = np.sum((observed_rvs - scaled_rvs)**2./scaled_rvs)
+    mean_likelihood = np.exp(chi_squared/2. )
+    return mean_likelihood
+
 def scale_rv(normalised_rvs, period_in_days, m1, m2, inclination):
+    ##ADD PARAMETERS MASS (based on RV template?)
+    ##ADD MASS RATIO PRIORS?
+    #period comes of params used to calculate the binary orbit?
     """Normalise our radial velocities based on actual physical parameters
     
     Parameters
@@ -140,11 +151,15 @@ def random_orbits(p_prior_type='LogNorm', p_max=365.25*20, e_prior_type='Uniform
     #Longitude of perioastron
     params['n'] = np.random.random(n_orb)*360
     
+    #Get random inclinations on a *sphere* by:
+    inc_rand = np.degrees(np.arccos(np.random.random(int(n_orb))))
+    params['i'] = inc_rand
+    
     return params
     
     
 
-def binary_orbit(params, jds, niter_anomaly=5, do_deriv=False):
+def binary_orbit(params, jds, niter_anomaly=5, do_deriv=False,plot_orbit_no=0):
     """Compute the separation and position angle of a binary given
     a list of epochs.
     
@@ -174,15 +189,15 @@ def binary_orbit(params, jds, niter_anomaly=5, do_deriv=False):
         velocity in units of semi major per unit per time  
     """
     #jds is a numpy array.
-    t = jds-params['T0']
-    P = params['P']
-    a = params['a']
-    e = abs(params['e'])
-    n = params['n']*np.pi/180.
-    w = params['w']*np.pi/180.
-    i = params['i']*np.pi/180.
+    t = jds-params['T0'][plot_orbit_no]
+    P = params['P'][plot_orbit_no]
+    a = params['a'][plot_orbit_no]
+    e = abs(params['e'][plot_orbit_no])
+    n = params['n'][plot_orbit_no]*np.pi/180.
+    w = params['w'][plot_orbit_no]*np.pi/180.
+    i = params['i'][plot_orbit_no]*np.pi/180.
     #Allow a negative eccentricity to have the obvious meaning.
-    if (params['e'] < 0):
+    if (params['e'][plot_orbit_no] < 0):
         t += P/2.
         w += np.pi
 

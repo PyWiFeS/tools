@@ -90,12 +90,16 @@ def read_and_find_star_p11(fn, manual_click=False, npix=7, subtract_sky=True,sky
     wave = a[0].header['CRVAL3'] + np.arange(flux.shape[0])*a[0].header['CDELT3']
     return flux_stamp,sig_stamp,wave
     
-def read_and_find_star_p08(fn, manual_click=False, npix=7, subtract_sky=True,sky_rad=2,fig_fn=''):
+def read_and_find_star_p08(fn, manual_click=False, npix=7, subtract_sky=True, 
+                           sky_rad=2, fig_fn=''):
     """Read in a cube and find the star.
     Return a postage stamp around the star and the wavelength scale
     
     NB This didn't really work as the details of flux calibration doesn't easily 
     enable optimal extraction.
+
+    Note: This may give unexpected results when more than a single star is 
+    within the IFU.
     
     Parameters
     ----------
@@ -109,8 +113,18 @@ def read_and_find_star_p08(fn, manual_click=False, npix=7, subtract_sky=True,sky
     Obs_date = a[0].header['DATE-OBS'].split('T')[0]
     RA = a[0].header['RA']
     DEC = a[0].header['DEC']
-    #Assume Stellar mode.
-    flux = np.array([a[i].data for i in range(1,13)])
+
+    # Determine the spectrograph mode
+    # ccd_sec has form [x_min:x_max, y_min:y_max]
+    y_min = int(a[0].header["CCDSEC"].split(",")[-1].split(":")[0])
+
+    # Using Full Frame
+    if y_min == 1:
+        flux = np.array([a[i].data for i in range(1,26)])
+    # Stellar mode (i.e. half frame)
+    else:
+        flux = np.array([a[i].data for i in range(1,13)])
+
     wave = a[1].header['CRVAL1'] + np.arange(flux.shape[2])*a[1].header['CDELT1']
     image = np.median(flux,axis=2)
     #!!! 1->7 is a HACK - because WiFeS seems to often fail on the edge pixels !!!
@@ -126,11 +140,14 @@ def read_and_find_star_p08(fn, manual_click=False, npix=7, subtract_sky=True,sky
         cid = fig.canvas.mpl_connect('button_press_event', onclick)
 
         plt.show(1)
-        maxpx = (int(round(np.min([coords[0][1], coords[1][1]]))), int(round(np.min([coords[0][0], coords[1][0]]))))
+        maxpx = (int(round(np.min([coords[0][1], coords[1][1]]))), 
+                 int(round(np.min([coords[0][0], coords[1][0]]))))
         coords = []
     else:
         maxpx = np.unravel_index(np.argmax(image[:,10:-10]),image[:,10:-10].shape)
         maxpx = (maxpx[0],maxpx[1]+10)
+
+    # Plotting
     plt.clf()
     plt.imshow(image,interpolation='nearest')
     plt.plot(maxpx[1],maxpx[0],'wx')
@@ -138,17 +155,33 @@ def read_and_find_star_p08(fn, manual_click=False, npix=7, subtract_sky=True,sky
     plt.xlabel('x pixel')
     plt.ylabel('y pixel')
     plt.title(str(Obj_name) + '_' + str(Obs_date) + '_(' + str(RA) + ',' + str(DEC) + ')')
+    
+    # Sky Subtraction
     if subtract_sky:
         xy = np.meshgrid(range(image.shape[1]),range(image.shape[0]))
         dist = np.sqrt((xy[0]-maxpx[1])**2.0 + (xy[1]-maxpx[0])**2.0)
         sky = np.where( (xy[0] > 0) & (xy[1] > 0) & 
             (xy[0] < image.shape[1]-1) & (xy[1] < image.shape[0]-1) &
             (dist > sky_rad) & (dist < image.shape[1]))
+
         for i in range(flux.shape[2]):
             flux[:,:,i] -= np.median(flux[sky[0],sky[1],i])
     ymin = np.min([np.max([maxpx[0]-npix//2,0]),image.shape[0]-npix])
     xmin = np.min([np.max([maxpx[1]-npix//2,0]),image.shape[1]-npix])
     flux_stamp = flux[ymin:ymin+npix,xmin:xmin+npix,:]
+
+    # Offset mins so plotted lines are at edge of pixels
+    xminp = xmin - 0.5
+    yminp = ymin - 0.5
+
+    # Plot vertical bounds
+    plt.plot([xminp, xminp], [yminp+npix, yminp], c="r")
+    plt.plot([xminp+npix, xminp+npix], [yminp+npix, yminp], c="r")
+
+    # Plot horizontal bounds
+    plt.plot([xminp, xminp+npix], [yminp+npix, yminp+npix], c="r")
+    plt.plot([xminp, xminp+npix], [yminp, yminp], c="r")
+
     if len(fig_fn)>0:
         plt.savefig(fig_fn, bbox_inches='tight')
     return flux_stamp,wave
@@ -180,8 +213,10 @@ def weighted_extract_spectrum(flux_stamp, readout_var=11.0):
     n_spaxels = np.prod(weights.shape)
 
     #Form a weighted average, then multiply by n_spaxels to get a sum
-    spectrum = n_spaxels * np.array([np.sum(flux_stamp[:,:,i]*weights)/np.sum(weights) for i in range(flux_stamp.shape[2])]) 
-    spectrum = np.array([np.sum(flux_stamp[:,:,i]*weights) for i in range(flux_stamp.shape[2])]) 
+    spectrum = n_spaxels * np.array(
+        [np.sum(flux_stamp[:,:,i]*weights)/np.sum(weights) for i in range(flux_stamp.shape[2])]) 
+    spectrum = np.array([
+        np.sum(flux_stamp[:,:,i]*weights) for i in range(flux_stamp.shape[2])]) 
     
     #Old calculation of sigma.  Lets be a little more readable!
     sig = np.array([np.sqrt(np.sum((np.maximum(flux_stamp[:,:,i],0)+readout_var)*weights**2)) for i in range(flux_stamp.shape[2])])

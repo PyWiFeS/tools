@@ -91,7 +91,8 @@ def read_and_find_star_p11(fn, manual_click=False, npix=7, subtract_sky=True,sky
     return flux_stamp,sig_stamp,wave
     
 def read_and_find_star_p08(fn, manual_click=False, npix=7, subtract_sky=True, 
-                           sky_rad=2, fig_fn=''):
+                           sky_rad=2, fig_fn='', fig_title=None, 
+                           do_median_subtraction=False, arm=None,min_slit_i=0,):
     """Read in a cube and find the star.
     Return a postage stamp around the star and the wavelength scale
     
@@ -109,7 +110,7 @@ def read_and_find_star_p08(fn, manual_click=False, npix=7, subtract_sky=True,
         Number of pixels to extract
     """
     a = pyfits.open(fn)
-    Obj_name = a[0].header['OBJECT']
+    Obj_name = a[0].header['OBJNAME']
     Obs_date = a[0].header['DATE-OBS'].split('T')[0]
     RA = a[0].header['RA']
     DEC = a[0].header['DEC']
@@ -127,11 +128,21 @@ def read_and_find_star_p08(fn, manual_click=False, npix=7, subtract_sky=True,
 
     wave = a[1].header['CRVAL1'] + np.arange(flux.shape[2])*a[1].header['CDELT1']
     image = np.median(flux,axis=2)
+
+    if do_median_subtraction:
+        image = np.log10(image)
+        image -= np.median(image)
+
     #!!! 1->7 is a HACK - because WiFeS seems to often fail on the edge pixels !!!
     plt.clf()
     global fig
     fig = plt.figure(1)
     plt.imshow(image,interpolation='nearest')
+
+    # Set title
+    if fig_title is not None:
+        plt.title(fig_title)
+
     if manual_click == True:
         global coords
 
@@ -147,14 +158,50 @@ def read_and_find_star_p08(fn, manual_click=False, npix=7, subtract_sky=True,
         maxpx = np.unravel_index(np.argmax(image[:,10:-10]),image[:,10:-10].shape)
         maxpx = (maxpx[0],maxpx[1]+10)
 
-    # Plotting
-    plt.clf()
-    plt.imshow(image,interpolation='nearest')
-    plt.plot(maxpx[1],maxpx[0],'wx')
-    plt.colorbar(fraction=0.0155, pad=0.0)
-    plt.xlabel('x pixel')
-    plt.ylabel('y pixel')
-    plt.title(str(Obj_name) + '_' + str(Obs_date) + '_(' + str(RA) + ',' + str(DEC) + ')')
+    # Plotting image
+    plt.close("all")
+    fig, axes = plt.subplots(2,2)
+
+    ax_im, ax_y, ax_x, _ = axes.flatten()
+    _.set_visible(False)
+
+    im_cmap = ax_im.imshow(image,interpolation='nearest')
+    cb = fig.colorbar(im_cmap, ax=ax_im, fraction=0.0155, pad=0.0)
+    ax_im.plot(maxpx[1],maxpx[0],'wx')
+    fig.suptitle(str(Obj_name) + '_' + str(Obs_date) + '_(' + str(RA) + ',' 
+                 + str(DEC) + ')_' + arm)
+
+    # Plotting X and Y distributions
+    ax_y.plot(np.log10(np.sum(image[:,min_slit_i:], axis=1)), 
+        np.arange(image.shape[0]), "r.-")
+    ax_y.set_ylim(image.shape[0],0)
+    #ax_y.set_xscale('log')
+
+    ax_x.plot(np.arange(image.shape[1]), np.log10(np.sum(image, axis=0)), ".-")
+    #ax_x.set_yscale('log')
+    
+    # Set aspect the same
+    asp_im = np.abs(float(np.diff(ax_im.get_xlim())[0]) / np.diff(ax_im.get_ylim())[0])
+    asp_x = float(np.diff(ax_x.get_xlim())[0]) / np.diff(ax_x.get_ylim())[0]
+    asp_y = float(np.diff(ax_y.get_xlim())[0]) / -np.diff(ax_y.get_ylim())[0]
+    
+    ax_x.set_aspect(asp_x/asp_im)
+    ax_y.set_aspect(asp_y/asp_im)
+
+    ax_x.set_xlabel('x pixel')
+    ax_x.set_ylabel(r'$\log_{10}$(x counts)')
+    ax_im.set_ylabel('y pixel')
+    ax_y.set_xlabel(r'$\log_{10}$(y counts)')
+
+    cb.ax.tick_params(labelsize="xx-small")
+    ax_im.tick_params(axis='both', which='major', labelsize="xx-small")
+    ax_x.tick_params(axis='both', which='major', labelsize="xx-small")
+    ax_y.tick_params(axis='both', which='major', labelsize="xx-small")
+
+    # Plot sum along y axis
+    #ax_y.plot(np.sum(maxpx[0], axis=0), np.arange(maxpx.shape[0]), ".-")
+
+    #ax_x.plot(np.arange(maxpx.shape[1]), np.sum(maxpx[0], axis=0), ".-")
     
     # Sky Subtraction
     if subtract_sky:
@@ -175,14 +222,15 @@ def read_and_find_star_p08(fn, manual_click=False, npix=7, subtract_sky=True,
     yminp = ymin - 0.5
 
     # Plot vertical bounds
-    plt.plot([xminp, xminp], [yminp+npix, yminp], c="r")
-    plt.plot([xminp+npix, xminp+npix], [yminp+npix, yminp], c="r")
+    ax_im.plot([xminp, xminp], [yminp+npix, yminp], c="r")
+    ax_im.plot([xminp+npix, xminp+npix], [yminp+npix, yminp], c="r")
 
     # Plot horizontal bounds
-    plt.plot([xminp, xminp+npix], [yminp+npix, yminp+npix], c="r")
-    plt.plot([xminp, xminp+npix], [yminp, yminp], c="r")
+    ax_im.plot([xminp, xminp+npix], [yminp+npix, yminp+npix], c="r")
+    ax_im.plot([xminp, xminp+npix], [yminp, yminp], c="r")
 
     if len(fig_fn)>0:
+        #plt.gcf().set_size_inches(5*asp_im, 5/asp_im)
         plt.savefig(fig_fn, bbox_inches='tight')
     return flux_stamp,wave
     

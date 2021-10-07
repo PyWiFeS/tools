@@ -26,10 +26,10 @@ import scipy.optimize as op
 import pdb
 import glob
 import pickle
-from readcol import readcol
+#from readcol import readcol
 from scipy.interpolate import InterpolatedUnivariateSpline
-from mpl_toolkits.mplot3d import Axes3D
 from astropy.modeling import models, fitting
+from os.path import exists
 plt.ion()
 
 def find_nearest(array,value):
@@ -66,15 +66,19 @@ def read_and_find_star_p11(fn, manual_click=False, npix=7, subtract_sky=True,sky
     This function should probably be REMOVED.
     """
     a = pyfits.open(fn)
-    #Assume Stellar mode.
-    flux = a[0].data[:,:,13:]
-    sig = a[1].data[:,:,13:]
+    #Assume Stellar mode if the flux is zero in any of the first columns
+    if a[0].data[0,0,1]==0:
+        flux = a[0].data[:,:,13:]
+        sig = a[1].data[:,:,13:]
+    else:
+        flux = a[0].data
+        sig = a[1].data
     image = np.median(flux,axis=0)
     maxpx = np.unravel_index(np.argmax(image[1:-1,1:-1]),image[1:-1,1:-1].shape)
     maxpx = (maxpx[0]+1,maxpx[1]+1)
     plt.clf()
-    plt.imshow(image,interpolation='nearest')
-    plt.plot(maxpx[1],maxpx[0],'wx')
+    plt.imshow(image,interpolation='nearest', vmin=0)
+    plt.plot(maxpx[1],maxpx[0],'rx')
     if subtract_sky:
         xy = np.meshgrid(range(image.shape[1]),range(image.shape[0]))
         dist = np.sqrt((xy[0]-maxpx[1])**2.0 + (xy[1]-maxpx[0])**2.0)
@@ -92,7 +96,7 @@ def read_and_find_star_p11(fn, manual_click=False, npix=7, subtract_sky=True,sky
     
 def read_and_find_star_p08(fn, manual_click=False, npix=7, subtract_sky=True, 
                            sky_rad=2, fig_fn='', fig_title=None, 
-                           do_median_subtraction=False, arm=None,min_slit_i=0,):
+                           do_median_subtraction=False, arm='',min_slit_i=0,):
     """Read in a cube and find the star.
     Return a postage stamp around the star and the wavelength scale
     
@@ -234,10 +238,11 @@ def read_and_find_star_p08(fn, manual_click=False, npix=7, subtract_sky=True,
         plt.savefig(fig_fn, bbox_inches='tight')
     return flux_stamp,wave
     
-def weighted_extract_spectrum(flux_stamp, readout_var=11.0):
+def weighted_extract_spectrum(flux_stamp_in, readout_var=None):
     """Optimally extract the spectrum based on a constant weighting
     
-    Based on a p08 file axis ordering.
+    Based on a p08 file axis ordering, but transposes axes
+    as required. 
     
     Readout variance is roughly 11 in the p08 extracted spectra
     
@@ -253,6 +258,16 @@ def weighted_extract_spectrum(flux_stamp, readout_var=11.0):
     1) Look for and remove bad pix/cosmic rays.
     2) Remove dodgy constant for readout_var.
     """
+    if flux_stamp_in.shape[0]>flux_stamp_in.shape[1]:
+        flux_stamp = np.transpose(flux_stamp_in, (1,2,0))
+    else:
+        flux_stamp = flux_stamp_in
+        
+    #Find the readout variance roughly if it isn't given.
+    if readout_var is None:
+        rsdev = 1.4826/np.sqrt(2)*np.nanmedian(np.abs(flux_stamp[0,0,1:]-flux_stamp[0,0,:-1]))
+        readout_var = rsdev**2
+        
     #Find the median flux over all wavelengths, limiting to be >0
     flux_med = np.maximum(np.median(flux_stamp,axis=2),0)
     
@@ -263,8 +278,6 @@ def weighted_extract_spectrum(flux_stamp, readout_var=11.0):
     #Form a weighted average, then multiply by n_spaxels to get a sum
     spectrum = n_spaxels * np.array(
         [np.sum(flux_stamp[:,:,i]*weights)/np.sum(weights) for i in range(flux_stamp.shape[2])]) 
-    spectrum = np.array([
-        np.sum(flux_stamp[:,:,i]*weights) for i in range(flux_stamp.shape[2])]) 
     
     #Old calculation of sigma.  Lets be a little more readable!
     sig = np.array([np.sqrt(np.sum((np.maximum(flux_stamp[:,:,i],0)+readout_var)*weights**2)) for i in range(flux_stamp.shape[2])])
@@ -288,29 +301,6 @@ def conv_ambre_spect(ambre_dir,ambre_conv_dir):
         ix_end = infn.rfind('.')
         outfn = infn[ix_start:ix_end] + 'conv.fits'
         pyfits.writeto(ambre_conv_dir + '/' + outfn,conv_data, clobber=True)
-    
-def conv_tlusty_spect(tlusty_dir,tlusty_conv_dir):    
-    """
-    Take all Tlusty spectra from a directory, convole to 0.1A, 
-    then save to a new directory
-    Currently resampling onto a wavelength grid of 0.1A also, from 
-    3000 to 12000A to match AMBRE spectra, note Tlusty only covers 3000A to 10000A
-    also mostly matching filenames
-    """
-    infns = glob.glob(tlusty_dir + '/*.vis.7')
-    for ii,infn in enumerate(infns):
-		indata = readcol(infn)
-		wav    = indata[:,0]
-		data   = indata[:,1]
-		cdata  = np.convolve(data,np.ones(10)/10.0,'same')
-		intwav = 0.1*np.arange(90000)+3000.0
-		icdata = np.interp(intwav,wav,cdata)
-		n1     = infn.split('/')[-1].split('BG')[1].split('g')	
-		n2     = 'g+'+str(float(n1[1].split('v')[0])/100.0)
-		n1     = 'p'+str(int(n1[0])/1)
-		outname = tlusty_conv_dir+'/'+n1 + ':'+n2+':m0.0:t01:z+0.00:a+0.00.TLUSTYconv.fits'
-		pyfits.writeto(outname,icdata,clobber=True)
-		print('convolving '+ str(ii+1) +' out of ' + str(len(infns)))
 
 def conv_phoenix_spect(pho_dir,pho_conv_dir):    
     """
@@ -322,19 +312,19 @@ def conv_phoenix_spect(pho_dir,pho_conv_dir):
     """
     infns = glob.glob(pho_dir + '/*.fits')    
     for ii,infn in enumerate(infns):
-		data = pyfits.getdata(infn)
-		wav  = pyfits.getdata('WAVE_PHOENIX-ACES-AGSS-COND-2011.fits')
-		##go from vacuum to air wavelengths
-		wav = wav/(1.0+2.735182E-4+131.4182/wav**2+2.76249e8/wav**4)
-		cdata  = np.convolve(data,np.ones(10)/10.0,'same')
-		intwav = 0.1*np.arange(90000)+3000.0
-		icdata = np.interp(intwav,wav,cdata)
-		n1     = infn.split('/')[-1].split('lte')[1].split('-')
-		n2     = 'g'+n1[1]
-		n1     = 'p'+n1[0]
-		outname = pho_conv_dir+'/'+n1 + ':'+n2+':m0.0:t01:z+0.00:a+0.00.PHOENIXconv.fits'
-		pyfits.writeto(outname,icdata,clobber=True)
-		print('convolving '+ str(ii+1) +' out of ' + str(len(infns)))
+        data = pyfits.getdata(infn)
+        wav  = pyfits.getdata('WAVE_PHOENIX-ACES-AGSS-COND-2011.fits')
+        ##go from vacuum to air wavelengths
+        wav = wav/(1.0+2.735182E-4+131.4182/wav**2+2.76249e8/wav**4)
+        cdata  = np.convolve(data,np.ones(10)/10.0,'same')
+        intwav = 0.1*np.arange(90000)+3000.0
+        icdata = np.interp(intwav,wav,cdata)
+        n1     = infn.split('/')[-1].split('lte')[1].split('-')
+        n2     = 'g'+n1[1]
+        n1     = 'p'+n1[0]
+        outname = pho_conv_dir+'/'+n1 + ':'+n2+':m0.0:t01:z+0.00:a+0.00.PHOENIXconv.fits'
+        pyfits.writeto(outname,icdata,clobber=True)
+        print('convolving '+ str(ii+1) +' out of ' + str(len(infns)))
    
     
 def make_wifes_p08_template(fn, out_dir,rv=0.0):
@@ -644,7 +634,7 @@ def calc_rv_template(spect,wave,sig, template_dir,bad_intervals,smooth_distance=
             name_string = 'T = ' + name + ' K'
     name_string = template_fns[ix][fn_ix+1:]
     
-	#pdb.set_trace()
+    #pdb.set_trace()
     #Fit for a precise RV... note that minimize (rather than minimize_scalar) failed more
     #often for spectra that were not good matches.
     modft = np.fft.rfft(template_int)
@@ -695,7 +685,7 @@ def calc_rv_template(spect,wave,sig, template_dir,bad_intervals,smooth_distance=
     plt.title(name_string + ', RV = {0:4.1f}+/-{1:4.1f} km/s'.format(rv,rv_sig))
     if len(fig_fn) > 0:
         fig_fn_new = fig_fn.split('_xcor.png')[0] + 'fitplot.png' 
-    	plt.savefig(fig_fn_new)
+        plt.savefig(fig_fn_new)
     #again save the figure data for use later in making nicer plots with IDL
     outsave = np.array([wave_log,spect_int,shifted_mod])
     saveoutname = fig_fn.split('_xcor.png')[0] + 'fitplot_figdat.pkl'
@@ -747,8 +737,6 @@ def calc_rv_todcor(spect,wave,sig, template_fns,bad_intervals=[],fig_fn='',\
             bad_intervals=bad_intervals, smooth_distance=smooth_distance, \
             convolve_template=convolve_template, nwave_log=nwave_log)
                 
-    rvs = np.zeros(len(template_fns))
-    peaks = np.zeros(len(template_fns))
     drv = np.log(wave_log[1]/wave_log[0])*2.998e5
       
     #*** Next (hopefully with two templates only!) we continue and apply the TODCOR algorithm.
@@ -913,7 +901,7 @@ def rv_process_dir(ddir,template_conv_dir='./ambre_conv/',standards_dir='',outfn
         print("WARNING: Feature not implemented yet")
         raise UserWarning
     fns = glob.glob(ddir + '/*p08.fits'  )
-  	#Uncomment to test individual stars in a data-set
+      #Uncomment to test individual stars in a data-set
     #pdb.set_trace()
     #fns = fns[32:33]
     # If an out directory isn't given, use the data directory.
@@ -923,9 +911,9 @@ def rv_process_dir(ddir,template_conv_dir='./ambre_conv/',standards_dir='',outfn
     outfile.write('#name,filename,ra,dec,bmsplt,mjd,rv,sig_rv,teff \n')
     texfile = open(outdir + '/' + texfn,'w')
     for iii,fn in enumerate(fns):
-    	##pdb.set_trace()
+        ##pdb.set_trace()
         h = pyfits.getheader(fn)
-        flux,wave = read_and_find_star_p08(fn,fig_fn=outdir + '/'+ h['OBJNAME'] + '.' + h['OBSID'] + '_star.png')  		
+        flux,wave = read_and_find_star_p08(fn,fig_fn=outdir + '/'+ h['OBJNAME'] + '.' + h['OBSID'] + '_star.png')          
         if h['BEAMSPLT']=='RT560':
             bad_intervals = ([0,5500],[6860,7020],)
         else:
@@ -943,7 +931,7 @@ def rv_process_dir(ddir,template_conv_dir='./ambre_conv/',standards_dir='',outfn
             #pdb.set_trace()
             if hamed > 5.0*scmed+cmed: bad_intervals = bad_intervals+([6550,6580],)
             print('Removing H-alpha line due to emission')
-    	##pdb.set_trace()
+        ##pdb.set_trace()
     
         spectrum,sig = weighted_extract_spectrum(flux)
         specfn = outdir + '/' + fn[fn.rfind('/')+1:] + '.spec.csv'
@@ -956,7 +944,19 @@ def rv_process_dir(ddir,template_conv_dir='./ambre_conv/',standards_dir='',outfn
         outfile.write(h['OBJNAME'] + ','+fn +','+ h['RA'] + ','+ h['DEC'] + ',' + h['BEAMSPLT'] + \
          ',{0:10.3f},{1:5.1f},{2:5.1f},'.format(h['MJD-OBS'],rv,rv_sig)+name + ' \n')
         texfile.write(h['OBJNAME'] + ' & '+ h['RA'] + ' & '+ h['DEC'] + ' & ' + h['BEAMSPLT'] + \
-            ' & {0:10.3f} & {1:5.1f} $\pm$ {2:5.1f} & '.format(h['MJD-OBS'],rv,rv_sig,name) + name + '\\\\ \n')
+            ' & {0:10.3f} & {1:5.1f} $\pm$ {2:5.1f} & '.format(h['MJD-OBS'],rv,rv_sig) + name + '\\\\ \n')
     outfile.close()
     texfile.close()
     
+if __name__=='__main__':
+    fn = 'T2m3wb-20210913.142518-0050.fits'
+    if exists(fn):
+        plt.figure(1)
+        flux_stamp,sig_stamp,wave = read_and_find_star_p11(fn)
+        flux, sig = weighted_extract_spectrum(np.transpose(flux_stamp,(1,2,0)))
+        plt.figure(2)
+        plt.clf()
+        plt.plot(wave, flux)
+        plt.ylim([0,np.percentile(flux,99.5)])
+        plt.ylabel(r'Flux Density (erg/s/cm$^2/\AA$)')
+    plt.xlabel(r'Wavelength ($\AA$)')
